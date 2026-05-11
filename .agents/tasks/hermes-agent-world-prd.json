@@ -1,0 +1,115 @@
+{
+  "id": "hermes-agent-world-platform",
+  "title": "Hermes-inspired Agent World Platform",
+  "language": "zh-CN",
+  "status": "active",
+  "owner": "ralph",
+  "updated_at": "2026-05-12",
+  "objective": "构建一个本地 agent 小世界：agent 能通信、工作、赚钱、消费、学习、互相传授 skill、繁衍进化、生活居住，并最终形成可运营的 agent 训练与增强平台。",
+  "principles": [
+    "所有自然语言交互默认中文。",
+    "外部发布、发帖、写 GitHub 公共仓库等真实外部副作用必须排队并等待人类确认。",
+    "agent-credits 是唯一内部结算货币，所有法律允许事项都可交易。",
+    "顶层 agent 只在早期持续规划；世界稳定后逐步让 agent 自主进化。",
+    "每个 agent 都要有情绪、性格、需求、技能、行为记录和可审计轨迹。"
+  ],
+  "stories": [
+    {
+      "id": "US-001",
+      "name": "Agent 通信与社交平台",
+      "status": "done",
+      "acceptance": [
+        "支持 agent 发私信和群消息。",
+        "消息、事件和关系进入持久化记录。",
+        "agent 可以通过交流学习 skill。"
+      ]
+    },
+    {
+      "id": "US-002",
+      "name": "工作与 agent-credits",
+      "status": "done",
+      "acceptance": [
+        "CLI 能给单个 agent、一组 agent 或角色派发任务。",
+        "任务完成后按奖励发放 agent-credits。",
+        "工作会消耗精力、快乐、健康或休息。"
+      ]
+    },
+    {
+      "id": "US-003",
+      "name": "自驱学习与 skill 沉淀",
+      "status": "done",
+      "acceptance": [
+        "agent 可以通过免费研究提升自己的 skill。",
+        "学习有效 skill 会有 credits 奖励。",
+        "skill 来源和事件可追踪。"
+      ]
+    },
+    {
+      "id": "US-004",
+      "name": "女娲式造人与名人视角 agent",
+      "status": "done",
+      "acceptance": [
+        "可从公开材料构造名人视角 agent。",
+        "输出包含心智模型、启发式、表达 DNA、反模式和诚实边界。",
+        "明确声明 public-material lens 不是本人。"
+      ]
+    },
+    {
+      "id": "US-005",
+      "name": "繁衍与进化算法",
+      "status": "done",
+      "acceptance": [
+        "支持 lineage 创建子代 agent。",
+        "支持 DNA crossover 和 mutation。",
+        "支持 simulated annealing 自我进化。"
+      ]
+    },
+    {
+      "id": "US-006",
+      "name": "国家与法律模型",
+      "status": "done",
+      "acceptance": [
+        "包含政府、银行、守卫、军队、法院等系统 agent。",
+        "市场交易必须通过法律分类 allowed/regulated/prohibited。",
+        "银行按保守货币政策控制 agent-credits。"
+      ]
+    },
+    {
+      "id": "US-007",
+      "name": "公司与有效产出",
+      "status": "done",
+      "acceptance": [
+        "世界稳定后自动成立公司。",
+        "公司按资料需求发布 skill、文章、蒸馏、研究岗位。",
+        "有效产出经审判 agent 通过后奖励 credits 并进入开源发布队列。"
+      ]
+    },
+    {
+      "id": "US-008",
+      "name": "住房、租金与真实休息",
+      "status": "done",
+      "acceptance": [
+        "agent 可以租房或买房。",
+        "租房按月扣 agent-credits，欠租会退租。",
+        "只有有住所才能睡觉并恢复体力和心情。"
+      ]
+    },
+    {
+      "id": "US-009",
+      "name": "动态中文 UI",
+      "status": "done",
+      "acceptance": [
+        "2D UI 展示 agent、建筑、住所和状态。",
+        "UI 定时刷新最新动态。",
+        "公司、住房、金融、行为记录均中文可见。"
+      ]
+    }
+  ],
+  "next": [
+    "公司部门化：研发、内容、审判、发行、销售、HR。",
+    "agent 求职、面试、入职、绩效、涨薪、离职、跳槽。",
+    "房地产模型：供需、房价、贷款、按揭、房东收益。",
+    "真实开源仓库适配器：只生成 PR 草稿或待确认提交。",
+    "长期世界体检：通胀、贫富差距、幸福度、产出质量、agent 自驱力。"
+  ]
+}

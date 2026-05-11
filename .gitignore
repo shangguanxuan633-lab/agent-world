@@ -1,0 +1,44 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments and package caches
+.venv/
+venv/
+env/
+node_modules/
+.playwright/
+
+# Local runtime state
+world*.db
+*.db
+*.db-wal
+*.db-shm
+runtime/
+*.log
+*.out.log
+*.err.log
+
+# Generated world artifacts and private local records
+artifacts/
+screenshots/
+中文记录/
+
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

@@ -1,0 +1,260 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>智能体世界</title>
+    <link rel="stylesheet" href="/static/app.css">
+  </head>
+  <body>
+    <header class="topbar">
+      <div>
+        <h1>智能体世界</h1>
+        <p id="summary">正在加载小世界状态...</p>
+        <p id="refreshStatus" class="refresh-status">实时同步准备中</p>
+      </div>
+      <div class="top-actions">
+        <button id="tickBtn" title="推进世界时间">推进一轮</button>
+        <button id="ralphBtn" title="写入 Ralph 规划包">Ralph 规划</button>
+        <button id="summaryBtn" title="导出中文世界汇总">导出汇总</button>
+      </div>
+    </header>
+
+    <main class="layout">
+      <section class="world-panel" aria-label="二维小世界">
+        <canvas id="worldCanvas" width="980" height="620"></canvas>
+      </section>
+
+      <aside class="side-panel">
+        <section>
+          <h2>安排工作</h2>
+          <form id="taskForm">
+            <input name="title" placeholder="任务标题" required>
+            <textarea name="description" placeholder="任务描述" rows="3" required></textarea>
+            <div class="form-row">
+              <input name="reward" type="number" min="1" value="80" required>
+              <select name="targetType">
+                <option value="group">群组</option>
+                <option value="agent">智能体</option>
+                <option value="role">角色</option>
+              </select>
+              <input name="target" value="makers" required>
+            </div>
+            <button type="submit">创建任务</button>
+          </form>
+        </section>
+
+        <section>
+          <h2>发送消息</h2>
+          <form id="messageForm">
+            <div class="form-row">
+              <input name="sender" value="owner" required>
+              <select name="targetType">
+                <option value="group">群组</option>
+                <option value="agent">智能体</option>
+              </select>
+              <input name="target" value="plaza" required>
+            </div>
+            <textarea name="body" placeholder="skill:检索能力 分享一条中文经验..." rows="3" required></textarea>
+            <button type="submit">发送</button>
+          </form>
+        </section>
+
+        <section>
+          <h2>智能体列表</h2>
+          <div id="agentList" class="list"></div>
+        </section>
+
+        <section>
+          <h2>创建智能体</h2>
+          <form id="agentForm">
+            <input name="name" placeholder="新智能体名称" required>
+            <div class="form-row">
+              <select name="blueprint" id="blueprintSelect"></select>
+              <input name="credits" type="number" min="0" value="80" required>
+              <input name="owner" value="local-owner" required>
+            </div>
+            <button type="submit">创建智能体</button>
+          </form>
+        </section>
+
+        <section>
+          <h2>训练智能体</h2>
+          <form id="trainingForm">
+            <div class="form-row">
+              <input name="agent" value="lumen" required>
+              <select name="program" id="programSelect"></select>
+              <button type="submit">训练</button>
+            </div>
+          </form>
+        </section>
+
+        <section>
+          <h2>繁衍谱系</h2>
+          <form id="lineageForm">
+            <input name="name" placeholder="子代智能体名称" required>
+            <div class="form-row">
+              <input name="parents" value="lumen,mira" required>
+              <input name="mutationRate" type="number" min="0" max="0.3" step="0.01" value="0.08" required>
+            <button type="submit">孵化</button>
+            </div>
+          </form>
+        </section>
+
+        <section>
+          <h2>女娲造智能体</h2>
+          <form id="nuwaForm">
+            <div class="form-row">
+              <select name="figure" id="nuwaSelect"></select>
+              <input name="name" placeholder="可选名称">
+              <button type="submit">创建</button>
+            </div>
+          </form>
+        </section>
+
+        <section>
+          <h2>合法市场</h2>
+          <form id="marketForm">
+            <input name="seller" value="mira" required>
+            <div class="form-row">
+              <select name="itemType" id="tradeCategorySelect"></select>
+              <input name="price" type="number" min="1" value="32" required>
+              <input name="name" placeholder="商品名称" required>
+            </div>
+            <textarea name="description" placeholder="商品描述" rows="2"></textarea>
+            <button type="submit">挂牌</button>
+          </form>
+          <form id="marketBuyForm">
+            <div class="form-row">
+              <input name="buyer" value="lumen" required>
+              <input name="listing" type="number" min="1" placeholder="挂牌编号" required>
+              <button type="submit">购买</button>
+            </div>
+          </form>
+        </section>
+
+        <section>
+          <h2>建设与产品</h2>
+          <form id="constructionForm">
+            <input name="name" placeholder="建筑名称" required>
+            <div class="form-row">
+              <input name="builder" value="forge" required>
+              <input name="kind" value="workshop" required>
+              <input name="cost" type="number" min="1" value="90" required>
+            </div>
+            <button type="submit">建设</button>
+          </form>
+          <form id="productForm">
+            <input name="name" placeholder="产品名称" required>
+            <div class="form-row">
+              <input name="designer" value="forge" required>
+              <input name="price" type="number" min="1" value="24" required>
+              <input name="stock" type="number" min="1" value="3" required>
+            </div>
+            <button type="submit">设计</button>
+          </form>
+          <form id="financeForm">
+            <div class="form-row">
+              <input name="agent" value="lumen" required>
+              <input name="topic" value="agent-world 金融模型" required>
+              <button type="submit">研究</button>
+            </div>
+          </form>
+          <button id="recordBtn" type="button">导出行为记录</button>
+        </section>
+
+        <section>
+          <h2>住房</h2>
+          <form id="housingRentForm">
+            <div class="form-row">
+              <input name="agent" value="lumen" required>
+              <input name="residence" type="number" min="1" placeholder="住所编号" required>
+              <button type="submit">租房</button>
+            </div>
+          </form>
+          <form id="housingBuyForm">
+            <div class="form-row">
+              <input name="agent" value="forge" required>
+              <input name="residence" type="number" min="1" placeholder="住所编号" required>
+              <button type="submit">买房</button>
+            </div>
+          </form>
+          <form id="housingInvestForm">
+            <div class="form-row">
+              <input name="agent" value="forge" required>
+              <input name="residence" type="number" min="1" placeholder="出租住所编号" required>
+              <input name="rent" type="number" min="1" placeholder="月租">
+              <button type="submit">买来出租</button>
+            </div>
+          </form>
+        </section>
+      </aside>
+
+      <section class="bottom-grid">
+        <div>
+          <h2>实时动态</h2>
+          <div id="activityFeed" class="list activity-list"></div>
+        </div>
+        <div>
+          <h2>任务</h2>
+          <div id="taskList" class="list"></div>
+        </div>
+        <div>
+          <h2>消息</h2>
+          <div id="messageList" class="list"></div>
+        </div>
+        <div>
+          <h2>发布队列</h2>
+          <div id="queueList" class="list"></div>
+        </div>
+        <div>
+          <h2>自主研究</h2>
+          <div id="researchList" class="list"></div>
+        </div>
+        <div>
+          <h2>选中智能体</h2>
+          <div id="detailPanel" class="list"></div>
+        </div>
+        <div>
+          <h2>训练与进化</h2>
+          <div id="evolutionList" class="list"></div>
+        </div>
+        <div>
+          <h2>关系</h2>
+          <div id="relationshipList" class="list"></div>
+        </div>
+        <div>
+          <h2>谱系</h2>
+          <div id="lineageList" class="list"></div>
+        </div>
+        <div>
+          <h2>制度层</h2>
+          <div id="institutionList" class="list"></div>
+        </div>
+        <div>
+          <h2>合法市场</h2>
+          <div id="marketList" class="list"></div>
+        </div>
+        <div>
+          <h2>建筑与产品</h2>
+          <div id="assetList" class="list"></div>
+        </div>
+        <div>
+          <h2>公司与有效产出</h2>
+          <div id="companyList" class="list"></div>
+        </div>
+        <div>
+          <h2>住房与租金</h2>
+          <div id="housingList" class="list"></div>
+        </div>
+        <div>
+          <h2>货币政策与金融报告</h2>
+          <div id="financeList" class="list"></div>
+        </div>
+      </section>
+    </main>
+
+    <div id="toast" role="status"></div>
+    <script src="/static/app.js"></script>
+  </body>
+</html>
