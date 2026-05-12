@@ -254,6 +254,69 @@ class WorldEngineTest(unittest.TestCase):
         self.assertTrue(any(row["reason"] == "company_effective_output_reward" for row in state["ledger"]))
         self.assertTrue(any(item["target"].startswith("github-open-source") or item["target"].startswith("github-nuwa") for item in state["publicationQueue"]))
 
+    def test_skill_package_company_output_is_complete_git_ready_directory(self) -> None:
+        with connect(self.db_path) as conn:
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO companies
+                  (id, name, kind, founder_agent_id, treasury_credits, status, mission, demand_score)
+                VALUES ('skillforge-company', 'SkillForge 开源技能公司', 'skill-lab', 'atlas', 3000, 'active', 'test skill output quality', 0.9)
+                """
+            )
+            conn.execute(
+                "UPDATE agents SET credits=1000, mood=0.9, energy=1.0, state='idle', current_task_id=NULL WHERE id='forge'"
+            )
+            conn.execute(
+                "UPDATE agent_needs SET rest=1.0, fun=0.9, health=1.0, purpose=0.9 WHERE agent_id='forge'"
+            )
+            task_id = self.engine._create_task_in_conn(
+                conn,
+                title="AI 工程：行业技能包",
+                description="公司需求：Agent 平台、RAG、工具调用、评测、记忆系统。请产出完整 SKILL.md、references、examples、scripts 和质量检查表。",
+                reward=120,
+                assigned_agent_id="forge",
+                created_by="company:skillforge-company",
+                actor_agent_id="skillforge-company",
+            )
+            conn.execute(
+                """
+                INSERT INTO company_jobs
+                  (company_id, title, industry, output_type, reward, task_id, status, publication_target)
+                VALUES ('skillforge-company', 'AI 工程：行业技能包', 'AI 工程', 'skill-package', 120, ?, 'open', 'github-open-source-skill-draft')
+                """,
+                (task_id,),
+            )
+
+        self.engine.tick(steps=8)
+        state = self.engine.snapshot()
+        output = next(row for row in state["companyOutputs"] if row["output_type"] == "skill-package")
+        self.assertEqual(output["status"], "accepted")
+        path = Path(output["path"])
+        self.assertTrue(path.is_dir())
+        for relative in (
+            "SKILL.md",
+            "manifest.json",
+            "references/quality-checklist.md",
+            "references/source-map.md",
+            "references/handoff.md",
+            "references/validation-procedure.md",
+            "examples/handoff.md",
+        ):
+            self.assertTrue((path / relative).exists(), relative)
+        self.assertFalse((path / "scripts" / "quick_validate.py").exists())
+        skill_text = (path / "SKILL.md").read_text(encoding="utf-8")
+        self.assertIn("description: Use when", skill_text)
+        self.assertIn("## 质量门槛", skill_text)
+        self.assertIn("## 安全边界", skill_text)
+        quality = self.engine._artifact_quality_report(path, "skill-package")
+        self.assertTrue(quality["passed"], quality)
+        self.assertTrue(
+            any(
+                item["target"] == "github-open-source-skill-draft" and "严格质检通过" in item["notes"]
+                for item in state["publicationQueue"]
+            )
+        )
+
     def test_industry_scout_can_submit_material_needs(self) -> None:
         self.engine.tick(steps=10)
         need_id = self.engine.submit_material_need(

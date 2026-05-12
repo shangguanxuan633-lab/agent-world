@@ -144,6 +144,8 @@ def build_parser() -> argparse.ArgumentParser:
     company = sub.add_parser("company", help="公司、岗位和有效产出命令。")
     company_sub = company.add_subparsers(dest="company_command", required=True)
     company_sub.add_parser("list", help="列出公司、岗位、有效产出和资料需求。")
+    company_repair = company_sub.add_parser("repair-skills", help="把历史 accepted 行业技能包补齐成完整 SKILL.md 目录。")
+    company_repair.add_argument("--limit", type=int, default=25)
     company_need = company_sub.add_parser("need", help="提交或更新 SkillForge 行业资料需求。")
     company_need_sub = company_need.add_subparsers(dest="company_need_command", required=True)
     company_need_add = company_need_sub.add_parser("add", help="把适合 agent 打工的行业机会提交到公司需求队列。")
@@ -438,6 +440,13 @@ def main(argv: list[str] | None = None) -> int:
             )
         for need in state["materialNeeds"][:8]:
             print(f"需求 #{need['id']:03} {need['industry']} {need['demand_score']:.2f} {need['topic']}")
+        return 0
+
+    if args.command == "company" and args.company_command == "repair-skills":
+        repaired = engine.repair_accepted_skill_packages(limit=args.limit)
+        print(f"已补齐 {len(repaired)} 个历史 skill 包")
+        for item in repaired[:20]:
+            print(f"产出 #{item['company_output_id']:03} 文档={item['document_id']} 质量={item['quality']:.2f} {item['path']}")
         return 0
 
     if args.command == "company" and args.company_command == "need" and args.company_need_command == "add":

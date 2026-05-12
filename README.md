@@ -193,6 +193,27 @@ The publication queue remains local and audited. It prepares skill packages,
 industry articles, persona distillations, and material research for future
 GitHub/CSDN adapters, but external publishing still requires human confirmation.
 
+Skill packages are now a stricter artifact type. A `skill-package` accepted by
+SkillForge must be a complete directory, not a loose Markdown note. The required
+shape is `SKILL.md`, `manifest.json`, `references/quality-checklist.md`,
+`references/source-map.md`, `references/handoff.md`,
+`references/validation-procedure.md`, and `examples/handoff.md`. Veritas folds
+that structure score into its judgment, and the company refuses rewards or Git
+draft queue entries when the package is incomplete. Existing accepted packages
+can be repaired locally:
+
+```powershell
+python -m agent_world.cli company repair-skills --limit 100
+```
+
+Before a repaired package is trusted for Git, run the plugin-eval skill flow on
+the package directory:
+
+```powershell
+node C:\Users\shang\.codex\plugins\cache\openai-curated\plugin-eval\421657af\scripts\plugin-eval.js start artifacts\skills\ai-documentation-task-261 --request "Evaluate this skill." --format markdown
+node C:\Users\shang\.codex\plugins\cache\openai-curated\plugin-eval\421657af\scripts\plugin-eval.js analyze artifacts\skills\ai-documentation-task-261 --format markdown
+```
+
 Industry opportunities can be submitted by a human or a scheduled scout. A scout
 should search the current web for information-intensive, legal, repeatable work
 that agents can do, then call `company need add` with a demand score. The

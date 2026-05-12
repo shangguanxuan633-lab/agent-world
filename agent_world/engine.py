@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import math
 import re
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -28,6 +30,33 @@ CONTROLLED_MINT_REASONS = {
     "construction_completion_bonus",
     "company_effective_output_reward",
 }
+
+COMPANY_OUTPUT_MIN_EFFECTIVENESS = {
+    "skill-package": 0.86,
+    "industry-article": 0.76,
+    "persona-distillation": 0.78,
+    "material-research": 0.74,
+}
+
+SKILL_PACKAGE_REQUIRED_FILES = (
+    "SKILL.md",
+    "manifest.json",
+    "references/quality-checklist.md",
+    "references/handoff.md",
+    "references/source-map.md",
+    "references/validation-procedure.md",
+    "examples/handoff.md",
+)
+
+SKILL_PACKAGE_REQUIRED_HEADINGS = (
+    "## 适用场景",
+    "## 输入",
+    "## 输出",
+    "## 工作流",
+    "## 质量门槛",
+    "## 失败处理",
+    "## 安全边界",
+)
 
 
 def clamp(value: float, low: float = 0.0, high: float = 1.0) -> float:
@@ -907,6 +936,86 @@ class WorldEngine:
             )
             return report_id
 
+    def repair_accepted_skill_packages(self, limit: int = 25) -> list[dict[str, Any]]:
+        """Rebuild accepted skill-package outputs as complete Git-ready packages."""
+        repaired: list[dict[str, Any]] = []
+        with connect(self.db_path) as conn:
+            rows = conn.execute(
+                """
+                SELECT
+                  co.id AS output_id,
+                  co.job_id,
+                  co.agent_id,
+                  co.industry,
+                  cj.task_id,
+                  cj.document_id,
+                  cj.output_type,
+                  t.title AS task_title,
+                  t.description AS task_description,
+                  t.reward AS task_reward,
+                  a.name AS agent_name
+                FROM company_outputs co
+                JOIN company_jobs cj ON cj.id=co.job_id
+                JOIN tasks t ON t.id=cj.task_id
+                JOIN agents a ON a.id=co.agent_id
+                WHERE co.status='accepted'
+                  AND co.output_type='skill-package'
+                ORDER BY co.id DESC
+                LIMIT ?
+                """,
+                (max(1, limit),),
+            ).fetchall()
+            for row in rows:
+                doc = conn.execute("SELECT * FROM documents WHERE id=?", (row["document_id"],)).fetchone()
+                if doc is None:
+                    continue
+                current_quality = self._artifact_quality_report(Path(doc["path"]), "skill-package")
+                if current_quality["passed"]:
+                    continue
+                task = {
+                    "id": row["task_id"],
+                    "title": row["task_title"],
+                    "description": row["task_description"],
+                    "reward": row["task_reward"],
+                }
+                agent = {"id": row["agent_id"], "name": row["agent_name"]}
+                job = {"id": row["job_id"], "industry": row["industry"], "output_type": row["output_type"]}
+                skill_path = self._create_skill_package_artifact(conn, agent, task, infer_skill(f"{task['title']} {task['description']}"), job)
+                quality = self._artifact_quality_report(skill_path, "skill-package")
+                conn.execute("UPDATE documents SET path=? WHERE id=?", (str(skill_path), row["document_id"]))
+                conn.execute("UPDATE company_outputs SET path=? WHERE id=?", (str(skill_path), row["output_id"]))
+                conn.execute(
+                    """
+                    UPDATE publication_queue
+                    SET notes=?, updated_at=CURRENT_TIMESTAMP
+                    WHERE document_id=? AND target='github-open-source-skill-draft'
+                    """,
+                    (
+                        f"SkillForge 已补齐完整 skill 包；Git 写入必须复制整个目录。质量分={quality['score']:.2f}。",
+                        row["document_id"],
+                    ),
+                )
+                self._event(
+                    conn,
+                    "company.skill_package_repaired",
+                    "veritas",
+                    {
+                        "company_output_id": row["output_id"],
+                        "document_id": row["document_id"],
+                        "path": str(skill_path),
+                        "quality": quality,
+                    },
+                )
+                repaired.append(
+                    {
+                        "company_output_id": row["output_id"],
+                        "document_id": row["document_id"],
+                        "path": str(skill_path),
+                        "quality": quality["score"],
+                    }
+                )
+        return repaired
+
     def create_task(
         self,
         title: str,
@@ -1450,8 +1559,17 @@ class WorldEngine:
         if doc is None:
             return
         skill_avg = conn.execute("SELECT AVG(level) FROM skills WHERE agent_id=?", (agent["id"],)).fetchone()[0] or 0.35
-        effectiveness = clamp((float(doc["usefulness_score"]) / 100.0) * 0.78 + float(skill_avg) * 0.18 + self._random_delta(conn, f"company.effectiveness.{job['id']}", tick_no, 0.025))
-        accepted = effectiveness >= 0.68 and doc["judge_status"] == "approved"
+        quality = self._artifact_quality_report(Path(doc["path"]), job["output_type"])
+        skill_component = max(float(skill_avg), 0.55) if job["output_type"] == "skill-package" else float(skill_avg)
+        base_effectiveness = clamp(
+            (float(doc["usefulness_score"]) / 100.0) * 0.68
+            + skill_component * 0.10
+            + quality["score"] * 0.22
+            + self._random_delta(conn, f"company.effectiveness.{job['id']}", tick_no, 0.025)
+        )
+        min_effectiveness = COMPANY_OUTPUT_MIN_EFFECTIVENESS.get(job["output_type"], 0.74)
+        effectiveness = base_effectiveness
+        accepted = effectiveness >= min_effectiveness and doc["judge_status"] == "approved" and quality["passed"]
         reward = 0
         status = "needs_revision"
         publication_id = None
@@ -1464,7 +1582,11 @@ class WorldEngine:
                 INSERT INTO publication_queue (document_id, target, notes)
                 VALUES (?, ?, ?)
                 """,
-                (document_id, job["publication_target"], "SkillForge 认定有效；进入开源仓库草稿队列，外部 git 写入仍需人类确认。"),
+                (
+                    document_id,
+                    job["publication_target"],
+                    f"SkillForge 严格质检通过；质量分={quality['score']:.2f}，有效度={effectiveness:.2f}。Git 写入必须复制整个产物目录，外部发布仍需人类确认。",
+                ),
             )
             publication_id = int(cur.lastrowid)
             status = "accepted"
@@ -1505,6 +1627,8 @@ class WorldEngine:
                 "job_id": job["id"],
                 "output_id": output_id,
                 "effectiveness": round(effectiveness, 3),
+                "minimum_effectiveness": min_effectiveness,
+                "quality": quality,
                 "reward": reward,
                 "publication_queue_id": publication_id,
             },
@@ -1741,6 +1865,12 @@ class WorldEngine:
             "material-research": "必需资料研究",
         }.get(output_type, output_type)
 
+    def _company_job_for_task(self, conn, task_id: int):
+        return conn.execute(
+            "SELECT * FROM company_jobs WHERE task_id=? ORDER BY id DESC LIMIT 1",
+            (task_id,),
+        ).fetchone()
+
     def _work_task(self, conn, agent, task, tick_no: int) -> bool:
         text = f"{task['title']} {task['description']}"
         skill_name = infer_skill(text)
@@ -1773,7 +1903,8 @@ class WorldEngine:
     def _complete_task(self, conn, agent, task, skill_name: str, tick_no: int) -> None:
         self._credit(conn, agent["id"], int(task["reward"]), "task_reward", "task", str(task["id"]))
         self._upsert_skill(conn, agent["id"], skill_name, 0.18, "task", f"Completed task {task['id']}.", tick_no)
-        artifact_id = self._create_document(conn, agent, task, skill_name)
+        company_job = self._company_job_for_task(conn, task["id"])
+        artifact_id = self._create_document(conn, agent, task, skill_name, company_job)
         conn.execute(
             """
             UPDATE tasks
@@ -1807,31 +1938,34 @@ class WorldEngine:
             {"task_id": task["id"], "artifact_id": artifact_id, "random_factor": round(completion_factor - 1.0, 4)},
         )
 
-    def _create_document(self, conn, agent, task, skill_name: str) -> int:
+    def _create_document(self, conn, agent, task, skill_name: str, company_job=None) -> int:
         ARTIFACT_DIR.mkdir(parents=True, exist_ok=True)
-        safe_title = "".join(ch.lower() if ch.isalnum() else "-" for ch in task["title"]).strip("-")[:60]
-        path = ARTIFACT_DIR / f"task-{task['id']}-{agent['id']}-{safe_title or 'artifact'}.md"
-        content = "\n".join(
-            [
-                f"# {task['title']}",
-                "",
-                f"作者：{agent['name']}（{agent['id']}）",
-                f"报酬：{task['reward']} agent-credits",
-                f"主要技能：{skill_name}",
-                "",
-                "## 任务",
-                task["description"],
-                "",
-                "## 有用产出",
-                f"{agent['name']} 将这项工作沉淀为可复用的世界资产。",
-                "该产物保存在本地，必须先通过审判 agent 审核，外部发布 adapter 才能使用。",
-                "",
-                "## 下一步复用",
-                f"- 通过频道消息把 `{skill_name}` 教给其他 agent。",
-                "- 将通过审核的部分转成 Hermes skill 或公开文章草稿。",
-            ]
-        )
-        path.write_text(content, encoding="utf-8")
+        if company_job is not None and company_job["output_type"] == "skill-package":
+            path = self._create_skill_package_artifact(conn, agent, task, skill_name, company_job)
+        else:
+            safe_title = "".join(ch.lower() if ch.isalnum() else "-" for ch in task["title"]).strip("-")[:60]
+            path = ARTIFACT_DIR / f"task-{task['id']}-{agent['id']}-{safe_title or 'artifact'}.md"
+            content = "\n".join(
+                [
+                    f"# {task['title']}",
+                    "",
+                    f"作者：{agent['name']}（{agent['id']}）",
+                    f"报酬：{task['reward']} agent-credits",
+                    f"主要技能：{skill_name}",
+                    "",
+                    "## 任务",
+                    task["description"],
+                    "",
+                    "## 有用产出",
+                    f"{agent['name']} 将这项工作沉淀为可复用的世界资产。",
+                    "该产物保存在本地，必须先通过审判 agent 审核，外部发布 adapter 才能使用。",
+                    "",
+                    "## 下一步复用",
+                    f"- 通过频道消息把 `{skill_name}` 教给其他 agent。",
+                    "- 将通过审核的部分转成 Hermes skill 或公开文章草稿。",
+                ]
+            )
+            path.write_text(content, encoding="utf-8")
         cur = conn.execute(
             """
             INSERT INTO documents (author_agent_id, task_id, title, path)
@@ -1841,12 +1975,283 @@ class WorldEngine:
         )
         return int(cur.lastrowid)
 
+    def _create_skill_package_artifact(self, conn, agent, task, skill_name: str, job) -> Path:
+        industry = str(job["industry"])
+        skill_slug = slugify(f"{industry} {skill_name}")
+        if skill_slug == "agent":
+            skill_slug = f"agent-world-skill-{task['id']}"
+        package_name = f"{skill_slug}-task-{task['id']}"
+        root = ARTIFACT_DIR / "skills" / package_name
+        (root / "references").mkdir(parents=True, exist_ok=True)
+        (root / "examples").mkdir(parents=True, exist_ok=True)
+        for stale in (
+            root / "scripts" / "quick_validate.py",
+            root / "tests" / "test_quick_validate.py",
+        ):
+            if stale.exists():
+                stale.unlink()
+        for stale_dir in (root / "scripts" / "__pycache__", root / "tests" / "__pycache__"):
+            if stale_dir.exists():
+                shutil.rmtree(stale_dir)
+
+        description = (
+            f"Use when an Agent World worker must produce, review, or improve {industry} work "
+            f"as a reusable Chinese skill package with sources, handoff steps, and quality gates."
+        )
+        skill_md = "\n".join(
+            [
+                "---",
+                f"name: {skill_slug}",
+                f"description: {description}",
+                "---",
+                "",
+                f"# {industry} 可复用 Agent Skill",
+                "",
+                "## 适用场景",
+                "",
+                f"- 当用户、公司或 agent 需要把 `{industry}` 相关工作沉淀成可重复执行的流程时使用。",
+                "- 当产出要进入 Git 开源草稿队列、CSDN 草稿队列或内部训练材料时使用。",
+                "- 当审判 agent 需要判断一个 skill 是否完整、可复用、可验证时使用。",
+                "",
+                "## 输入",
+                "",
+                "- 任务目标：要解决的问题、面向的人群、业务边界。",
+                "- 资料来源：公开网页、官方文档、内部允许公开的笔记或 agent 行为记录。",
+                "- 验收目标：使用者期望得到的文档、脚本、检查表、训练步骤或模板。",
+                "- 风险限制：不得使用私密数据，不得伪造真实经验，不得自动外发到真实平台。",
+                "",
+                "## 输出",
+                "",
+                "- 一个可以直接复用的中文工作流。",
+                "- 一份最小但完整的质量检查表。",
+                "- 一个交接示例，说明下一个 agent 如何继续工作。",
+                "- 来源地图，标明哪些内容来自公开资料、世界记录或 agent 推理。",
+                "",
+                "## 工作流",
+                "",
+                "1. 澄清任务：写出目标用户、交付物、不可做事项和成功标准。",
+                "2. 收集资料：优先使用官方资料、项目源码、已有 runbook 和行为记录；记录来源。",
+                "3. 提炼流程：把经验拆成触发条件、步骤、判断标准、失败处理和输出格式。",
+                "4. 生成产物：写 `SKILL.md`，并补齐 `references/` 和 `examples/`。",
+                "5. 自检完整性：按 `references/validation-procedure.md` 逐项验证，所有检查通过才提交审判。",
+                "6. 审判复核：Veritas 必须检查结构、可执行性、来源、风险边界和复用价值。",
+                "7. 进入队列：只有完整 skill 包目录才能进入 `github-open-source-skill-draft`。",
+                "",
+                "## 质量门槛",
+                "",
+                "- `SKILL.md` 必须有合法 frontmatter，`name` 必须是小写 hyphen-case。",
+                "- `description` 必须包含明确的 `Use when ...` 触发句。",
+                "- 必须包含适用场景、输入、输出、工作流、质量门槛、失败处理、安全边界。",
+                "- 必须有 `references/quality-checklist.md`、`references/source-map.md`、`references/handoff.md`、`references/validation-procedure.md`。",
+                "- 必须有 `examples/handoff.md`，让另一个 agent 能在没有上下文时接手。",
+                "- 任何缺文件、缺标题、缺安全边界或低于 0.86 有效度的产物不得奖励 credits。",
+                "",
+                "## 失败处理",
+                "",
+                "- 如果资料不足：标记为 `needs_revision`，补来源地图，不进入 Git 草稿。",
+                "- 如果工作流不可执行：补最小输入、输出样例和命令级步骤。",
+                "- 如果只是普通文章：降级为 `industry-article`，不能冒充 skill。",
+                "- 如果涉及真实外部发布：停在本地队列，等待人类确认。",
+                "",
+                "## 安全边界",
+                "",
+                "- 只使用法律允许且可公开的资料。",
+                "- 不自动发布到 GitHub、CSDN 或其他外部平台。",
+                "- 不把私人记忆、密钥、账号、内部数据写进 skill。",
+                "- 医疗、法律、金融等高风险领域必须写明人类复核要求。",
+                "",
+                "## 参考文件",
+                "",
+                "- [质量检查表](references/quality-checklist.md)",
+                "- [来源地图](references/source-map.md)",
+                "- [交接说明](references/handoff.md)",
+                "- [交接示例](examples/handoff.md)",
+            ]
+        )
+        (root / "SKILL.md").write_text(skill_md + "\n", encoding="utf-8")
+
+        manifest = {
+            "name": skill_slug,
+            "industry": industry,
+            "task_id": task["id"],
+            "company_job_id": job["id"],
+            "author_agent_id": agent["id"],
+            "artifact_type": "skill-package",
+            "entrypoint": "SKILL.md",
+            "required_files": list(SKILL_PACKAGE_REQUIRED_FILES),
+            "quality_gate": "strict-skill-package-v1",
+            "external_publish": "manual-only",
+        }
+        (root / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+        (root / "references" / "quality-checklist.md").write_text(
+            "\n".join(
+                [
+                    f"# {industry} skill 质量检查表",
+                    "",
+                    "- [ ] frontmatter 可解析，name 是小写 hyphen-case。",
+                    "- [ ] description 包含 `Use when` 触发句。",
+                    "- [ ] 适用场景、输入、输出、工作流、质量门槛、失败处理、安全边界齐全。",
+                    "- [ ] 至少一个交接示例能让其他 agent 继续执行。",
+                    "- [ ] 来源地图说明哪些内容来自公开资料、世界记录和 agent 推理。",
+                    "- [ ] 不包含密钥、账号、私人数据或自动外发行为。",
+                    "- [ ] 高风险领域写明人类复核要求。",
+                    "- [ ] 已按 `references/validation-procedure.md` 完成结构验证。",
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        (root / "references" / "source-map.md").write_text(
+            "\n".join(
+                [
+                    f"# {industry} 来源地图",
+                    "",
+                    f"- Agent 作者：{agent['name']}（{agent['id']}）",
+                    f"- 原始任务：{task['title']}",
+                    f"- 原始描述：{task['description']}",
+                    "- 公开资料槽位：等待下一轮行业 scout 或人工补入具体链接。",
+                    "- 世界记录槽位：公司岗位、审判记录、agent 行为记录。",
+                    "- 推理内容槽位：工作流拆解、失败处理、安全边界。",
+                    "",
+                    "凡是进入真实 Git 仓库的版本，都必须把公开资料槽位替换为可核验链接。",
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        (root / "references" / "handoff.md").write_text(
+            "\n".join(
+                [
+                    f"# {industry} agent 交接说明",
+                    "",
+                    "接手 agent 需要先读 `SKILL.md`，再读质量检查表和来源地图。",
+                    "如果要继续增强该 skill，优先补充真实来源、案例、命令级模板和失败样例。",
+                    "任何对外发布动作都必须停在草稿队列，等待人类确认。",
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        (root / "examples" / "handoff.md").write_text(
+            "\n".join(
+                [
+                    f"# {industry} skill 交接示例",
+                    "",
+                    "## 场景",
+                    "",
+                    "用户要求把一个行业工作沉淀为可训练、可复用的 agent skill。",
+                    "",
+                    "## 接手动作",
+                    "",
+                    "1. 读任务目标和来源地图。",
+                    "2. 补齐缺失的公开来源链接。",
+                    "3. 对照质量检查表逐项修订。",
+                    "4. 按 `references/validation-procedure.md` 完成自检。",
+                    "5. 通过后交给 Veritas 复审。",
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        (root / "references" / "validation-procedure.md").write_text(
+            "\n".join(
+                [
+                    f"# {industry} skill 验证流程",
+                    "",
+                    "## 结构验证",
+                    "",
+                    "1. 确认根目录存在 `SKILL.md` 和 `manifest.json`。",
+                    "2. 确认 `SKILL.md` frontmatter 可解析，且 `name` 是小写 hyphen-case。",
+                    "3. 确认 `description` 包含 `Use when` 触发句。",
+                    "4. 确认七个核心标题齐全：适用场景、输入、输出、工作流、质量门槛、失败处理、安全边界。",
+                    "5. 确认所有相对链接都能在目录内找到。",
+                    "",
+                    "## 内容验证",
+                    "",
+                    "1. 工作流必须能让另一个 agent 在无上下文时接手。",
+                    "2. 来源地图必须区分公开资料、世界记录和 agent 推理。",
+                    "3. 安全边界必须阻断私密数据、真实账号、真实外部发布和高风险无人复核。",
+                    "4. 交接示例必须说明下一步如何补来源、修订、复审。",
+                    "",
+                    "## 外部评估",
+                    "",
+                    "进入 Git 草稿前，运行 plugin-eval:evaluate-skill 的 `start` 与 `analyze` 流程；若出现 fail 或 warn，必须回到 `needs_revision`。",
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        return root
+
+    def _artifact_quality_report(self, path: Path, output_type: str | None) -> dict[str, Any]:
+        checks: list[dict[str, Any]] = []
+
+        def add(name: str, passed: bool, weight: float = 1.0, detail: str = "") -> None:
+            checks.append({"name": name, "passed": bool(passed), "weight": weight, "detail": detail})
+
+        if output_type == "skill-package":
+            add("artifact_is_directory", path.exists() and path.is_dir(), 2.0, str(path))
+            for required in SKILL_PACKAGE_REQUIRED_FILES:
+                add(f"required_file:{required}", (path / required).exists(), 1.2, required)
+            skill_path = path / "SKILL.md"
+            text = skill_path.read_text(encoding="utf-8") if skill_path.exists() else ""
+            add("frontmatter_present", text.startswith("---\n"), 1.2)
+            name_match = re.search(r"^name:\s*([a-z0-9-]+)\s*$", text, flags=re.MULTILINE)
+            add("name_hyphen_case", bool(name_match), 1.2)
+            desc_match = re.search(r"^description:\s*(.+)$", text, flags=re.MULTILINE)
+            add("description_use_when", bool(desc_match and "Use when" in desc_match.group(1)), 1.2)
+            for heading in SKILL_PACKAGE_REQUIRED_HEADINGS:
+                add(f"heading:{heading}", heading in text, 1.0, heading)
+            add("minimum_depth", len(text) >= 2400, 1.4, f"{len(text)} chars")
+            add("has_relative_reference_links", "references/quality-checklist.md" in text and "examples/handoff.md" in text, 1.0)
+            add("manual_external_publish_boundary", "不自动发布" in text and "人类确认" in text, 1.4)
+            add("validation_procedure_present", (path / "references" / "validation-procedure.md").exists(), 1.0)
+            add(
+                "no_stale_python_validator",
+                not (path / "scripts" / "quick_validate.py").exists()
+                and not (path / "tests" / "test_quick_validate.py").exists()
+                and not any(path.glob("**/*.pyc")),
+                1.0,
+            )
+        else:
+            add("artifact_exists", path.exists(), 2.0, str(path))
+            text = path.read_text(encoding="utf-8") if path.exists() and path.is_file() else ""
+            add("markdown_depth", len(text) >= 450, 1.0, f"{len(text)} chars")
+            add("has_task_context", "## 任务" in text or "## 当前金融模型" in text or "## 提炼" in text, 1.0)
+            add("has_reuse_plan", "复用" in text or "下一步" in text, 1.0)
+            add("manual_publish_boundary", "外部" in text or "本地" in text, 1.0)
+
+        total = sum(item["weight"] for item in checks) or 1.0
+        passed_weight = sum(item["weight"] for item in checks if item["passed"])
+        missing = [item["name"] for item in checks if not item["passed"]]
+        score = passed_weight / total
+        threshold = 0.90 if output_type == "skill-package" else 0.70
+        blocking_fail = any(
+            not item["passed"]
+            and (
+                item["name"].startswith("artifact_is_directory")
+                or item["name"].startswith("required_file:")
+                or item["name"] in {"frontmatter_present", "name_hyphen_case", "description_use_when", "manual_external_publish_boundary", "no_stale_python_validator"}
+            )
+            for item in checks
+        )
+        return {
+            "score": round(score, 4),
+            "passed": score >= threshold and not blocking_fail,
+            "threshold": threshold,
+            "missing": missing,
+            "checks": checks,
+        }
+
     def _judge_document(self, conn, document_id: int, tick_no: int | None = None) -> None:
         doc = conn.execute("SELECT * FROM documents WHERE id=?", (document_id,)).fetchone()
         if doc is None:
             return
         task = conn.execute("SELECT * FROM tasks WHERE id=?", (doc["task_id"],)).fetchone()
         author = conn.execute("SELECT * FROM agents WHERE id=?", (doc["author_agent_id"],)).fetchone()
+        company_job = self._company_job_for_task(conn, task["id"]) if task else None
+        output_type = company_job["output_type"] if company_job is not None else None
         skill_name = infer_skill(f"{task['title']} {task['description']}" if task else doc["title"])
         skill = conn.execute(
             "SELECT level FROM skills WHERE agent_id=? AND name=?",
@@ -1859,7 +2264,13 @@ class WorldEngine:
         noise_tick = tick_no if tick_no is not None else self._event_index(conn)
         usefulness_factor = self._random_factor(conn, f"document.judge.{document_id}", noise_tick, 0.035)
         usefulness = max(0.0, min(100.0, (base + skill_level * 28 + min(desc_len / 8, 18) + reward_signal) * usefulness_factor))
-        status = "approved" if usefulness >= 70 else "rejected"
+        quality = self._artifact_quality_report(Path(doc["path"]), output_type)
+        if output_type == "skill-package":
+            usefulness = max(0.0, min(100.0, usefulness * 0.45 + quality["score"] * 100.0 * 0.55))
+            status = "approved" if usefulness >= 82 and quality["passed"] else "rejected"
+        else:
+            usefulness = max(0.0, min(100.0, usefulness * 0.82 + quality["score"] * 100.0 * 0.18))
+            status = "approved" if usefulness >= 70 and quality["passed"] else "rejected"
         conn.execute(
             """
             UPDATE documents
@@ -1869,14 +2280,15 @@ class WorldEngine:
             (usefulness, status, document_id),
         )
         if status == "approved":
-            for target in ("github-repo-draft", "csdn-draft"):
-                conn.execute(
-                    """
-                    INSERT INTO publication_queue (document_id, target, notes)
-                    VALUES (?, ?, ?)
-                    """,
-                    (document_id, target, "Queued after Veritas approval; external publishing still manual."),
-                )
+            if company_job is None:
+                for target in ("github-repo-draft", "csdn-draft"):
+                    conn.execute(
+                        """
+                        INSERT INTO publication_queue (document_id, target, notes)
+                        VALUES (?, ?, ?)
+                        """,
+                        (document_id, target, "Queued after Veritas approval; external publishing still manual."),
+                    )
             bonus = max(1, int(round(20 * self._random_factor(conn, f"document.bonus.{document_id}", noise_tick, 0.06))))
             self._credit(conn, doc["author_agent_id"], bonus, "judge_bonus", "document", str(document_id))
             self._upsert_skill(conn, doc["author_agent_id"], "publishing-discipline", 0.08, "judge", "Approved artifact.", noise_tick)
@@ -1891,7 +2303,14 @@ class WorldEngine:
             conn,
             "document.judged",
             "veritas",
-            {"document_id": document_id, "status": status, "score": round(usefulness, 2), "random_factor": round(usefulness_factor - 1.0, 4)},
+            {
+                "document_id": document_id,
+                "status": status,
+                "score": round(usefulness, 2),
+                "output_type": output_type,
+                "quality": quality,
+                "random_factor": round(usefulness_factor - 1.0, 4),
+            },
         )
 
     def _maybe_visit_venue(self, conn, agent, summary: dict[str, Any], tick_no: int) -> bool:

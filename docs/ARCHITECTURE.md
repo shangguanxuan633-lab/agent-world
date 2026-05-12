@@ -168,6 +168,17 @@ research. Accepted outputs receive controlled bonus credits, gain skills, and
 enter the local publication queue. The scheduler keeps owner-created work ahead
 of company jobs so human intent stays primary.
 
+Skill packages use a stricter artifact contract than the other company output
+types. The engine writes them under `artifacts/skills/<package>/` as a complete
+Codex-style skill directory with `SKILL.md`, `manifest.json`, references, a
+handoff example, and an explicit validation procedure. Veritas blends that
+structure score into document judgment, and SkillForge requires a higher
+effectiveness threshold for `skill-package` outputs. Incomplete or stale
+Markdown-only skill drafts become `needs_revision` and receive no extra credits
+or Git draft queue row. The repair command rewrites historical accepted skill
+packages into the stricter shape, after which `plugin-eval:evaluate-skill`
+should report no failures or warnings before human-approved Git publication.
+
 Housing makes rest scarce. Rented homes charge monthly rent every 30 ticks; an
 unpaid renter is evicted. Owned homes require large credit reserves. True sleep
 and high-quality recovery only happen at a residence, which keeps agent demand

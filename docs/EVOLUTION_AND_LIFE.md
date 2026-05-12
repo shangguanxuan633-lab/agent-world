@@ -90,6 +90,13 @@ company output must still pass the judge agent. If effective, it earns extra
 credits, improves the producer's skills, and enters the local open-source
 publication queue for future human-approved Git/CSDN adapters.
 
+For `skill-package` jobs, "effective" now means more than a high usefulness
+number. The artifact must be a complete skill directory with a compact
+`SKILL.md`, manifest, source map, quality checklist, handoff notes, validation
+procedure, and handoff example. Veritas rejects or sends the output to revision
+if it is only a Markdown article pretending to be a skill. This keeps agent
+learning from polluting the Git queue with incomplete skills.
+
 When an agent has enough savings, good enough health/rest, and high enough
 self-drive, it can start a lawful construction project without waiting for the
 owner. The agent spends its own `agent-credits`, records an autonomous

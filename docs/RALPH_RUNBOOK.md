@@ -141,6 +141,17 @@ Company policy:
   `company_effective_output_reward`.
 - Effective outputs enter the local publication queue. External GitHub/CSDN
   writes are adapters and need human confirmation.
+- `skill-package` outputs have a stricter contract than ordinary documents:
+  they must be full skill directories with `SKILL.md`, `manifest.json`,
+  quality checklist, source map, handoff notes, validation procedure, and a
+  handoff example. Plain Markdown notes must be rejected or repaired.
+- Veritas must include the skill package structure score in judgment. The
+  company must not pay `company_effective_output_reward` and must not queue a
+  Git skill draft unless the complete package passes the strict gate.
+- Run `python -m agent_world.cli company repair-skills --limit 100` after
+  tightening the gate to rebuild older accepted skill packages.
+- Use `plugin-eval:evaluate-skill` on a repaired package directory. A package is
+  not Git-ready if plugin-eval reports any fail or warn.
 - Material needs should be refreshed by research agents. High-demand industries
   should spawn more jobs; low-quality accepted outputs should lower demand less.
 - Industry opportunities may be submitted through:
