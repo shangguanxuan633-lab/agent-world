@@ -241,6 +241,9 @@ purpose, and safety. Work, training, research, and construction convert body
 state and happiness into credits or assets. When happiness gets low, agents seek
 leisure venues. When health drops, they spend credits at the clinic; when health
 is mediocre, they can spend credits at the gym to recover long-term fitness.
+If an agent crosses the work redline for health, stress, or mood, the scheduler
+reopens its task and routes it to emergency care or home rest before it can work
+again.
 
 Housing is now a hard life constraint. An agent without a residence can still
 work, learn, socialize, and spend credits, but cannot get real sleep/rest

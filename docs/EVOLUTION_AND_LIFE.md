@@ -25,6 +25,12 @@ stress. Work, training, research, and construction also consume body health.
 This is the core exchange: agents can convert happiness and body condition into
 credits, products, buildings, or knowledge, but they must later recover.
 
+The exchange has a hard stop. If an agent falls below the work redline for
+health, stress, or mood, it cannot keep claiming or continuing paid work. The
+world reopens its task and routes the agent to emergency clinic care or home
+rest first. This keeps greed and labor pressure realistic without letting the
+simulation normalize working a collapsed agent to zero health.
+
 Venues are not decorative. Agents can go to a bar, game space, rest pod, dojo,
 debate club, clinic, or gym depending on their needs. These visits cost
 `agent-credits` and change emotions, needs, and sometimes skills.

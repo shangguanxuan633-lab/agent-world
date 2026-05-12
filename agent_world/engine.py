@@ -29,6 +29,7 @@ CONTROLLED_MINT_REASONS = {
     "financial_research_reward",
     "construction_completion_bonus",
     "company_effective_output_reward",
+    "public_health_grant",
 }
 
 COMPANY_OUTPUT_MIN_EFFECTIVENESS = {
@@ -57,6 +58,18 @@ SKILL_PACKAGE_REQUIRED_HEADINGS = (
     "## 失败处理",
     "## 安全边界",
 )
+
+MIN_HEALTH_FOR_WORK = 0.25
+MAX_STRESS_FOR_WORK = 0.82
+MIN_MOOD_FOR_WORK = 0.08
+
+ROLE_TASK_COMPATIBILITY = {
+    "researcher": ("researcher", "documentarian"),
+    "documentarian": ("documentarian", "researcher"),
+    "nuwa_perspective": ("researcher", "documentarian"),
+    "engineer": ("engineer", "hybrid"),
+    "hybrid": ("researcher", "documentarian", "engineer", "hybrid"),
+}
 
 
 def clamp(value: float, low: float = 0.0, high: float = 1.0) -> float:
@@ -1171,6 +1184,9 @@ class WorldEngine:
             if self._maybe_anger_event(conn, agent, tick_no, summary):
                 continue
 
+            if self._maybe_emergency_recovery_action(conn, agent, tick_no, summary):
+                continue
+
             if self._maybe_housing_action(conn, agent, tick_no, summary):
                 continue
 
@@ -1350,6 +1366,14 @@ class WorldEngine:
                 (agent["id"],),
             )
             return None
+        if self._is_unfit_for_work(conn, agent):
+            conn.execute("UPDATE tasks SET status='open', updated_at=CURRENT_TIMESTAMP WHERE id=?", (task["id"],))
+            conn.execute(
+                "UPDATE agents SET current_task_id=NULL, state='recovering', updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                (agent["id"],),
+            )
+            self._event(conn, "work.blocked_medical", agent["id"], {"task_id": task["id"]})
+            return None
         if str(task["created_by"]).startswith("company:") and self._matching_owner_task(conn, agent) is not None:
             conn.execute("UPDATE tasks SET status='open', updated_at=CURRENT_TIMESTAMP WHERE id=?", (task["id"],))
             conn.execute(
@@ -1360,6 +1384,18 @@ class WorldEngine:
             return None
         return task
 
+    def _claimable_assigned_roles(self, role: str) -> tuple[str, ...]:
+        return ROLE_TASK_COMPATIBILITY.get(role, (role,))
+
+    def _is_unfit_for_work(self, conn, agent) -> bool:
+        needs = self._need_dict(conn, agent["id"])
+        emotion = self._emotion_dict(conn, agent["id"])
+        return (
+            needs["health"] < MIN_HEALTH_FOR_WORK
+            or emotion["stress"] > MAX_STRESS_FOR_WORK
+            or float(agent["mood"]) < MIN_MOOD_FOR_WORK
+        )
+
     def _matching_owner_task(self, conn, agent) -> Any | None:
         membership_ids = [
             row["channel_id"]
@@ -1367,6 +1403,7 @@ class WorldEngine:
         ]
         if not membership_ids:
             membership_ids = ["__none__"]
+        role_targets = self._claimable_assigned_roles(agent["role"])
         return conn.execute(
             """
             SELECT * FROM tasks
@@ -1374,16 +1411,19 @@ class WorldEngine:
               AND created_by NOT LIKE 'company:%'
               AND (
                 assigned_agent_id=?
-                OR assigned_role=?
+                OR assigned_role IN ({})
                 OR assigned_channel_id IN ({})
               )
             ORDER BY reward DESC, id ASC
             LIMIT 1
-            """.format(",".join("?" for _ in membership_ids)),
-            (agent["id"], agent["role"], *membership_ids),
+            """.format(",".join("?" for _ in role_targets), ",".join("?" for _ in membership_ids)),
+            (agent["id"], *role_targets, *membership_ids),
         ).fetchone()
 
     def _claim_next_task(self, conn, agent) -> Any | None:
+        if self._is_unfit_for_work(conn, agent):
+            self._event(conn, "work.claim_blocked_medical", agent["id"], {"role": agent["role"]})
+            return None
         membership_ids = [
             row["channel_id"]
             for row in conn.execute("SELECT channel_id FROM memberships WHERE agent_id=?", (agent["id"],))
@@ -1399,19 +1439,20 @@ class WorldEngine:
                 (agent["id"],),
             ).fetchone()
         else:
+            role_targets = self._claimable_assigned_roles(agent["role"])
             task = conn.execute(
                 """
                 SELECT * FROM tasks
                 WHERE status='open'
                   AND (
                     assigned_agent_id=?
-                    OR assigned_role=?
+                    OR assigned_role IN ({})
                     OR assigned_channel_id IN ({})
                   )
                 ORDER BY CASE WHEN created_by LIKE 'company:%' THEN 1 ELSE 0 END, reward DESC, id ASC
                 LIMIT 1
-                """.format(",".join("?" for _ in membership_ids) or "NULL"),
-                (agent["id"], agent["role"], *membership_ids),
+                """.format(",".join("?" for _ in role_targets), ",".join("?" for _ in membership_ids) or "NULL"),
+                (agent["id"], *role_targets, *membership_ids),
             ).fetchone()
         if task is None:
             return None
@@ -1469,6 +1510,14 @@ class WorldEngine:
             actions.append({"company": "skillforge-company", "action": "founded"})
             company = conn.execute("SELECT * FROM companies WHERE id='skillforge-company'").fetchone()
 
+        open_jobs = conn.execute(
+            "SELECT COUNT(*) FROM company_jobs WHERE company_id=? AND status IN ('open', 'in_progress')",
+            (company["id"],),
+        ).fetchone()[0]
+        workforce_action = self._maybe_expand_company_research_workforce(conn, company, tick_no)
+        if workforce_action:
+            actions.append(workforce_action)
+
         owner_work = conn.execute(
             """
             SELECT COUNT(*)
@@ -1478,11 +1527,6 @@ class WorldEngine:
         ).fetchone()[0]
         if owner_work:
             return actions
-
-        open_jobs = conn.execute(
-            "SELECT COUNT(*) FROM company_jobs WHERE company_id=? AND status IN ('open', 'in_progress')",
-            (company["id"],),
-        ).fetchone()[0]
         if open_jobs >= 4:
             return actions
         if (tick_no + open_jobs) % 2 != 0 and open_jobs > 0:
@@ -1533,6 +1577,143 @@ class WorldEngine:
         self._event(conn, "company.job_created", "skillforge-company", {"company_id": company["id"], "job_id": job_id, "task_id": task_id, "industry": need["industry"], "output_type": output_type, "reward": reward})
         actions.append({"company": company["id"], "action": "job_created", "job": job_id, "task": task_id, "industry": need["industry"], "output_type": output_type})
         return actions
+
+    def _maybe_expand_company_research_workforce(self, conn, company, tick_no: int) -> dict[str, Any] | None:
+        backlog = conn.execute(
+            """
+            SELECT COUNT(*)
+            FROM tasks
+            WHERE status IN ('open', 'in_progress')
+              AND created_by=?
+              AND assigned_role='researcher'
+            """,
+            (f"company:{company['id']}",),
+        ).fetchone()[0]
+        if int(backlog) < 2:
+            return None
+        researcher_count = conn.execute("SELECT COUNT(*) FROM agents WHERE role='researcher'").fetchone()[0]
+        healthy_available = conn.execute(
+            """
+            SELECT COUNT(*)
+            FROM agents a
+            JOIN agent_needs n ON n.agent_id=a.id
+            JOIN agent_emotions e ON e.agent_id=a.id
+            WHERE a.role IN ('researcher', 'documentarian', 'nuwa_perspective')
+              AND a.current_task_id IS NULL
+              AND n.health >= ?
+              AND e.stress <= ?
+              AND a.mood >= ?
+            """,
+            (MIN_HEALTH_FOR_WORK, MAX_STRESS_FOR_WORK, MIN_MOOD_FOR_WORK),
+        ).fetchone()[0]
+        target_researchers = min(4, max(2, int(backlog)))
+        if int(researcher_count) >= target_researchers and int(healthy_available) >= 1:
+            return None
+        existing = conn.execute(
+            "SELECT id FROM agents WHERE id LIKE 'nuwa-researcher-%' ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        if existing is not None and (tick_no % 6) != 0:
+            return None
+        child_id = self._create_company_researcher_in_conn(conn, tick_no)
+        self._event(
+            conn,
+            "company.researcher_spawned",
+            "skillforge-company",
+            {
+                "agent_id": child_id,
+                "backlog": int(backlog),
+                "researcher_count_before": int(researcher_count),
+                "healthy_available": int(healthy_available),
+            },
+        )
+        return {
+            "company": company["id"],
+            "action": "researcher_spawned",
+            "agent": child_id,
+            "backlog": int(backlog),
+        }
+
+    def _create_company_researcher_in_conn(self, conn, tick_no: int) -> str:
+        blueprint = conn.execute("SELECT * FROM agent_blueprints WHERE id='researcher'").fetchone()
+        if blueprint is None:
+            raise ValueError("researcher blueprint is missing")
+        suffix = conn.execute("SELECT COUNT(*) FROM agents WHERE role='researcher'").fetchone()[0] + 1
+        agent_id = slugify(f"nuwa-researcher-{suffix}")
+        while conn.execute("SELECT 1 FROM agents WHERE id=?", (agent_id,)).fetchone() is not None:
+            suffix += 1
+            agent_id = slugify(f"nuwa-researcher-{suffix}")
+        personality = json_loads(blueprint["default_personality_json"], {})
+        personality.update(
+            {
+                "curiosity": max(0.78, float(personality.get("curiosity", 0.55))),
+                "greed": max(0.7, float(personality.get("greed", 0.62))),
+                "sociability": max(0.58, float(personality.get("sociability", 0.5))),
+                "native_language": "zh-CN",
+                "origin": "company-workforce-incubation",
+            }
+        )
+        row_count = conn.execute("SELECT COUNT(*) FROM agents").fetchone()[0]
+        x = 0.16 + ((row_count * 13) % 74) / 100
+        y = 0.16 + ((row_count * 23) % 74) / 100
+        conn.execute(
+            """
+            INSERT INTO agents
+              (id, owner_id, name, role, archetype, personality_json, mood, energy, credits, autonomy, state, x, y)
+            VALUES (?, 'local-owner', ?, 'researcher', ?, ?, 0.68, 0.82, 120, 0.72, 'incubating', ?, ?)
+            """,
+            (
+                agent_id,
+                f"Nuwa Researcher {suffix}",
+                blueprint["archetype"],
+                json_dumps(personality),
+                x,
+                y,
+            ),
+        )
+        seed_agent_life_state(conn)
+        for channel in ("plaza", "research", "leisure"):
+            conn.execute("INSERT OR IGNORE INTO memberships (channel_id, agent_id) VALUES (?, ?)", (channel, agent_id))
+        for skill in json_loads(blueprint["base_skills_json"], []):
+            conn.execute(
+                "INSERT OR IGNORE INTO skills (agent_id, name, level, source, notes) VALUES (?, ?, ?, 'company-incubation', ?)",
+                (agent_id, skill["name"], max(0.42, float(skill.get("level", 0.35))), "Spawned to relieve researcher backlog."),
+            )
+        for name, level in (("persona-distillation", 0.5), ("material-research", 0.48), ("source-triangulation", 0.52)):
+            self._upsert_skill(conn, agent_id, name, level, "company-incubation", "Research backlog relief", tick_no)
+        parents = [
+            row["id"]
+            for row in conn.execute(
+                """
+                SELECT id
+                FROM agents
+                WHERE id IN ('lumen', 'mira', 'karpathy-lens', 'munger-lens')
+                ORDER BY CASE id WHEN 'lumen' THEN 0 WHEN 'mira' THEN 1 ELSE 2 END
+                LIMIT 2
+                """
+            )
+        ]
+        if len(parents) >= 2:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO agent_lineage
+                  (child_agent_id, parent_ids_json, method, mutation_rate, inherited_skills_json, cost)
+                VALUES (?, ?, 'company-nuwa-incubation', 0.06, ?, 0)
+                """,
+                (
+                    agent_id,
+                    json_dumps(parents),
+                    json_dumps(
+                        [
+                            {"name": "research", "level": 0.52},
+                            {"name": "source-triangulation", "level": 0.52},
+                            {"name": "persona-distillation", "level": 0.5},
+                        ]
+                    ),
+                ),
+            )
+        self._memory(conn, agent_id, "company_incubated_researcher", 0.36, 0.76, "研究任务积压时由 SkillForge 通过女娲式劳动力孵化补充研究员。")
+        self._event(conn, "agent.created", agent_id, {"owner": "local-owner", "blueprint": "researcher", "reason": "research_backlog"})
+        return agent_id
 
     def _next_material_need(self, conn, company_id: str, tick_no: int) -> Any | None:
         rows = conn.execute(
@@ -1679,6 +1860,73 @@ class WorldEngine:
             self._event(conn, "housing.evicted", occupant["id"], {"residence_id": row["id"], "rent": rent})
             actions.append({"agent": occupant["id"], "residence": row["id"], "action": "evicted", "amount": rent})
         return actions
+
+    def _maybe_emergency_recovery_action(self, conn, agent, tick_no: int, summary: dict[str, Any]) -> bool:
+        needs = self._need_dict(conn, agent["id"])
+        emotion = self._emotion_dict(conn, agent["id"])
+        critical_health = needs["health"] < MIN_HEALTH_FOR_WORK
+        critical_emotion = float(agent["mood"]) < MIN_MOOD_FOR_WORK or emotion["stress"] > MAX_STRESS_FOR_WORK
+        if not critical_health and not critical_emotion:
+            return False
+
+        task_id = agent["current_task_id"]
+        if task_id is not None:
+            task = conn.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
+            if task is not None and task["status"] in ("open", "in_progress"):
+                conn.execute("UPDATE tasks SET status='open', updated_at=CURRENT_TIMESTAMP WHERE id=?", (task_id,))
+                self._event(conn, "work.interrupted_for_recovery", agent["id"], {"task_id": task_id})
+
+        if critical_health:
+            venue = conn.execute("SELECT * FROM venues WHERE kind='hospital' ORDER BY price ASC LIMIT 1").fetchone()
+            if venue is not None:
+                price = int(venue["price"])
+                if int(agent["credits"]) >= price:
+                    self._credit(conn, agent["id"], -price, "venue_spend", "venue", venue["id"])
+                    payer = agent["id"]
+                else:
+                    payer = "civic-government"
+                    government = conn.execute("SELECT * FROM agents WHERE id='civic-government'").fetchone()
+                    if government is not None and int(government["credits"]) >= price:
+                        self._credit(conn, "civic-government", -price, "public_health_subsidy", "agent", agent["id"])
+                    else:
+                        self._credit(conn, agent["id"], price, "public_health_grant", "venue", venue["id"])
+                        self._credit(conn, agent["id"], -price, "venue_spend", "venue", venue["id"])
+                        payer = "public_health_grant"
+                conn.execute(
+                    "INSERT INTO visits (agent_id, venue_id, cost) VALUES (?, ?, ?)",
+                    (agent["id"], venue["id"], price),
+                )
+                self._set_needs(conn, agent["id"], health=0.42, rest=0.18, fun=0.08, safety=0.1)
+                self._set_emotions(conn, agent["id"], stress=-0.32, anger=-0.12, joy=0.08, confidence=0.06)
+                conn.execute(
+                    """
+                    UPDATE agents
+                    SET current_task_id=NULL, state='recovering', mood=?, energy=?, updated_at=CURRENT_TIMESTAMP
+                    WHERE id=?
+                    """,
+                    (
+                        clamp(float(agent["mood"]) + self._jitter_delta(conn, f"emergency.mood.{agent['id']}", tick_no, 0.08, 0.035)),
+                        clamp(float(agent["energy"]) + self._jitter_delta(conn, f"emergency.energy.{agent['id']}", tick_no, 0.1, 0.035)),
+                        agent["id"],
+                    ),
+                )
+                self._memory(conn, agent["id"], "emergency_care", 0.24, 0.82, f"健康低于工作红线，被送到 {venue['name']} 恢复。")
+                self._event(
+                    conn,
+                    "health.emergency_care",
+                    agent["id"],
+                    {"venue": venue["id"], "price": price, "payer": payer, "health_before": round(needs["health"], 3)},
+                )
+                summary["visits"].append({"agent": agent["id"], "venue": venue["id"], "emergency": True})
+                return True
+
+        residence = self._agent_residence(conn, agent["id"])
+        if residence is not None:
+            self._rest_at_home(conn, agent, residence, tick_no)
+            summary["housing"].append({"agent": agent["id"], "residence": residence["id"], "action": "forced_rest"})
+            self._event(conn, "health.forced_home_rest", agent["id"], {"stress": emotion["stress"], "mood": agent["mood"]})
+            return True
+        return False
 
     def _maybe_housing_action(self, conn, agent, tick_no: int, summary: dict[str, Any]) -> bool:
         if agent["owner_id"] == "world-system" and agent["id"] != "city-guard":

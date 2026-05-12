@@ -398,6 +398,107 @@ class WorldEngineTest(unittest.TestCase):
         self.assertGreaterEqual(forge_after, forge_before + 260)
         self.assertTrue(any(row["agent_id"] == "forge" and row["reason"] == "housing_rent_income" for row in state["ledger"]))
 
+    def test_unhealthy_agent_is_blocked_from_work_and_receives_emergency_care(self) -> None:
+        with connect(self.db_path) as conn:
+            task_id = self.engine._create_task_in_conn(
+                conn,
+                "Critical researcher overload",
+                "A task that should not keep a sick agent working.",
+                80,
+                assigned_agent_id="lumen",
+                actor_agent_id="owner",
+            )
+            conn.execute("UPDATE tasks SET status='in_progress', progress=30 WHERE id=?", (task_id,))
+            conn.execute(
+                "UPDATE agents SET current_task_id=?, credits=1, mood=0.02, energy=0.8, state='working' WHERE id='lumen'",
+                (task_id,),
+            )
+            conn.execute("UPDATE agent_needs SET health=0.05, fun=0.1, rest=0.4 WHERE agent_id='lumen'")
+            conn.execute("UPDATE agent_emotions SET stress=0.9, anger=0.2 WHERE agent_id='lumen'")
+
+        self.engine.tick(steps=1)
+        state = self.engine.snapshot()
+        lumen = next(agent for agent in state["agents"] if agent["id"] == "lumen")
+        task = next(task for task in state["tasks"] if task["id"] == task_id)
+        self.assertIsNone(lumen["current_task_id"])
+        self.assertEqual(lumen["state"], "recovering")
+        self.assertGreater(lumen["needs"]["health"], 0.25)
+        self.assertEqual(task["status"], "open")
+        self.assertTrue(any(event["kind"] == "health.emergency_care" and event["actor_agent_id"] == "lumen" for event in state["events"]))
+
+    def test_researcher_tasks_can_be_claimed_by_compatible_roles_when_lumen_is_unfit(self) -> None:
+        with connect(self.db_path) as conn:
+            task_id = self.engine._create_task_in_conn(
+                conn,
+                "医疗健康：人物技能蒸馏",
+                "研究型人物技能蒸馏任务，应该允许相关知识角色承接。",
+                90,
+                assigned_role="researcher",
+                created_by="company:skillforge-company",
+                actor_agent_id="skillforge-company",
+            )
+            conn.execute("UPDATE agents SET current_task_id=NULL, state='idle', mood=0.02 WHERE id='lumen'")
+            conn.execute("UPDATE agent_needs SET health=0.0, fun=0.0 WHERE agent_id='lumen'")
+            conn.execute("UPDATE agent_emotions SET stress=1.0 WHERE agent_id='lumen'")
+            conn.execute("UPDATE agents SET current_task_id=NULL, state='idle', mood=0.86, energy=0.9 WHERE role IN ('documentarian', 'nuwa_perspective')")
+            conn.execute("UPDATE agent_needs SET health=0.9, fun=0.7, rest=0.8 WHERE agent_id IN (SELECT id FROM agents WHERE role IN ('documentarian', 'nuwa_perspective'))")
+            conn.execute("UPDATE agent_emotions SET stress=0.1 WHERE agent_id IN (SELECT id FROM agents WHERE role IN ('documentarian', 'nuwa_perspective'))")
+
+        self.engine.tick(steps=1)
+        state = self.engine.snapshot()
+        task = next(task for task in state["tasks"] if task["id"] == task_id)
+        workers = [agent for agent in state["agents"] if agent["current_task_id"] == task_id]
+        self.assertEqual(task["status"], "in_progress")
+        self.assertTrue(workers)
+        self.assertNotEqual(workers[0]["id"], "lumen")
+        self.assertIn(workers[0]["role"], {"documentarian", "nuwa_perspective"})
+
+    def test_company_spawns_researcher_when_research_backlog_outgrows_workforce(self) -> None:
+        with connect(self.db_path) as conn:
+            for index in range(4):
+                conn.execute(
+                    """
+                    INSERT INTO tasks (title, description, reward, status, created_by)
+                    VALUES (?, 'maturity seed', 1, 'done', 'test')
+                    """,
+                    (f"maturity seed {index}",),
+                )
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO companies
+                  (id, name, kind, founder_agent_id, treasury_credits, status, mission, demand_score)
+                VALUES ('skillforge-company', 'SkillForge', 'skill-lab', 'atlas', 3000, 'active', 'test workforce', 0.9)
+                """
+            )
+            for index in range(2):
+                task_id = self.engine._create_task_in_conn(
+                    conn,
+                    f"研究积压任务 {index}",
+                    "研究任务积压时公司应该补充研究员。",
+                    88,
+                    assigned_role="researcher",
+                    created_by="company:skillforge-company",
+                    actor_agent_id="skillforge-company",
+                )
+                conn.execute(
+                    """
+                    INSERT INTO company_jobs
+                      (company_id, title, industry, output_type, reward, task_id, status, publication_target)
+                    VALUES ('skillforge-company', ?, 'AI 工程', 'persona-distillation', 88, ?, 'open', 'github-nuwa-persona-draft')
+                    """,
+                    (f"研究积压任务 {index}", task_id),
+                )
+            conn.execute("UPDATE agents SET current_task_id=NULL, state='idle', mood=0.02 WHERE id='lumen'")
+            conn.execute("UPDATE agent_needs SET health=0.0, fun=0.0 WHERE agent_id='lumen'")
+            conn.execute("UPDATE agent_emotions SET stress=1.0 WHERE agent_id='lumen'")
+
+        before = len([agent for agent in self.engine.snapshot()["agents"] if agent["role"] == "researcher"])
+        self.engine.tick(steps=1)
+        state = self.engine.snapshot()
+        after = len([agent for agent in state["agents"] if agent["role"] == "researcher"])
+        self.assertGreater(after, before)
+        self.assertTrue(any(event["kind"] == "company.researcher_spawned" for event in state["events"]))
+
 
 if __name__ == "__main__":
     unittest.main()

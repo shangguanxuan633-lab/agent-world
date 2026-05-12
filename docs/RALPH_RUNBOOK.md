@@ -154,6 +154,14 @@ Company policy:
   not Git-ready if plugin-eval reports any fail or warn.
 - Material needs should be refreshed by research agents. High-demand industries
   should spawn more jobs; low-quality accepted outputs should lower demand less.
+- Company scheduling should be socially realistic, not exploitative. If a
+  company role backlog appears, compatible roles may take the work
+  (`researcher` jobs can be handled by researchers, documentarians, and Nuwa
+  perspective agents). If the healthy workforce is still too small, SkillForge
+  may incubate a new researcher and record lineage.
+- Agents below the health/stress/mood work redline must not keep working for
+  credits. Reopen their task, route them to clinic care or forced home rest, and
+  record the event before assigning more work.
 - Industry opportunities may be submitted through:
 
 ```powershell

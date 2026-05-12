@@ -116,31 +116,37 @@ flowchart LR
 
 ## Tick Loop
 
-1. Assign idle agents to matching open tasks.
-2. Progress active work based on energy and relevant skills.
-3. Pay `agent-credits` when work completes.
-4. Create a document artifact for completed work.
-5. Let the judge agent review the document.
-6. Queue approved documents for future publication targets.
-7. Update skills from work, web-style research, and peer messages.
-8. Let tired or unhappy agents spend credits in venues.
-9. Let low-health agents spend credits at the clinic and medium-low-health
+1. Interrupt medically unsafe work and send critical agents to emergency care or
+   forced home rest.
+2. Assign idle, healthy agents to matching open tasks. Role matching is
+   capability-adjacent, not literal-only: researcher work can be handled by
+   researchers, documentarians, and Nuwa perspective agents when the primary
+   workforce is exhausted.
+3. Progress active work based on energy and relevant skills.
+4. Pay `agent-credits` when work completes.
+5. Create a document artifact for completed work.
+6. Let the judge agent review the document.
+7. Queue approved documents for future publication targets.
+8. Update skills from work, web-style research, and peer messages.
+9. Let tired or unhappy agents spend credits in venues.
+10. Let low-health agents spend credits at the clinic and medium-low-health
    agents spend credits at the gym.
-10. Let high-savings, high-self-drive agents autonomously invest credits into
+11. Let high-savings, high-self-drive agents autonomously invest credits into
     lawful buildings.
-11. Let housed low-rest agents sleep at home; let homeless low-rest agents build
+12. Let housed low-rest agents sleep at home; let homeless low-rest agents build
     stress and seek housing.
-12. Charge monthly rent, evict unpaid renters, and record housing events.
-13. After top-agent stand-down, let companies publish paid jobs from material
-    needs and reward judged-effective outputs.
-14. Let researchers periodically summarize the current financial model.
-15. Progress construction projects into building assets.
-16. Let the central bank apply MV=PY monetary policy: cap circulating credits,
+13. Charge monthly rent, evict unpaid renters, and record housing events.
+14. After top-agent stand-down, let companies publish paid jobs from material
+    needs, expand the workforce when a role backlog appears, and reward
+    judged-effective outputs.
+15. Let researchers periodically summarize the current financial model.
+16. Progress construction projects into building assets.
+17. Let the central bank apply MV=PY monetary policy: cap circulating credits,
     cap bank reserves, collect stability fees under inflation pressure, and
     release only bounded productive liquidity when safe.
-17. Apply bounded OU-style random factors to progress, recovery, quality,
+18. Apply bounded OU-style random factors to progress, recovery, quality,
     judgment, rewards, relationships, and background drift.
-18. Write auditable events and preserve stable state.
+19. Write auditable events and preserve stable state.
 
 ## Civic Economy And Legal Trade
 
@@ -178,6 +184,14 @@ Markdown-only skill drafts become `needs_revision` and receive no extra credits
 or Git draft queue row. The repair command rewrites historical accepted skill
 packages into the stricter shape, after which `plugin-eval:evaluate-skill`
 should report no failures or warnings before human-approved Git publication.
+
+The scheduler must not treat agents as disposable labor. Agents below the
+health/stress/mood work redline cannot claim or continue paid work; their active
+task is reopened and they are routed to clinic care or forced home rest. Company
+jobs also use compatible role matching so a single literal role cannot become a
+permanent bottleneck. If researcher-role work backs up while the healthy
+available workforce is too small, SkillForge can create a company-incubated
+researcher with lineage metadata and research-channel membership.
 
 Housing makes rest scarce. Rented homes charge monthly rent every 30 ticks; an
 unpaid renter is evicted. Owned homes require large credit reserves. True sleep
