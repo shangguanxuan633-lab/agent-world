@@ -35,10 +35,12 @@ zero food.
 Food is a first-class cost of life. Nutrition decays every tick, faster under
 work, stress, training, and homelessness. Hungry agents buy meals before
 entertainment. If they lack meal money but can still move, the civic layer opens
-a small legal survival job assigned to that agent. If they remain broke while
-nutrition and health collapse, the agent becomes `starved`: current work is
-reopened, energy and health drop to zero, and the event is recorded as a death
-in memory and the audit log.
+a small legal survival job assigned to that agent. If nutrition and health
+collapse, the civic government or bank first pays an emergency meal voucher and
+opens a survival job so the agent can recover and repay through future work. If
+public rescue capacity is also exhausted, the agent becomes `starved`: current
+work is reopened, energy and health drop to zero, and the event is recorded as a
+death in memory and the audit log.
 
 Venues are not decorative. Agents can go to a bar, game space, rest pod, dojo,
 debate club, clinic, or gym depending on their needs. These visits cost

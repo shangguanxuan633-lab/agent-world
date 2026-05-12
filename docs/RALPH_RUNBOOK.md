@@ -103,8 +103,10 @@ Every iteration should preserve the life model:
   buys food first; if broke but still functional, the civic layer opens a small
   legal survival job.
 - If an agent has no credits for the minimum meal and nutrition/health collapse,
-  it can become `starved`. Current work must be reopened and the death must be
-  visible in ledger-adjacent events, memories, summaries, and UI.
+  the civic government or bank must attempt an emergency meal voucher and create
+  a survival job. Only if public rescue capacity is exhausted can the agent
+  become `starved`. Current work must be reopened and both rescues and deaths
+  must be visible in ledger-adjacent events, memories, summaries, and UI.
 - Housing remains a hard cost: rented homes charge every 30 ticks, unpaid rent
   causes eviction, and homelessness worsens rest/safety pressure.
 

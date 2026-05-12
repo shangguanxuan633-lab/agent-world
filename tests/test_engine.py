@@ -218,7 +218,7 @@ class WorldEngineTest(unittest.TestCase):
         self.assertTrue(any(row["agent_id"] == "lumen" and row["reason"] == "food_meal" for row in state["ledger"]))
         self.assertTrue(any(event["kind"] == "survival.ate_meal" and event["actor_agent_id"] == "lumen" for event in state["events"]))
 
-    def test_broke_starving_agent_dies_and_reopens_work(self) -> None:
+    def test_broke_starving_agent_gets_emergency_food_rescue_and_reopens_work(self) -> None:
         task_id = self.engine.create_task(
             title="不能带饿硬干的任务",
             description="这个任务会被求生红线打断。",
@@ -238,11 +238,48 @@ class WorldEngineTest(unittest.TestCase):
         state = self.engine.snapshot()
         ember = next(agent for agent in state["agents"] if agent["id"] == "ember")
         task = next(task for task in state["tasks"] if task["id"] == task_id)
-        self.assertEqual(ember["state"], "starved")
+        self.assertEqual(ember["state"], "eating")
         self.assertIsNone(ember["current_task_id"])
         self.assertEqual(task["status"], "open")
+        self.assertGreaterEqual(ember["needs"]["nutrition"], 0.5)
+        self.assertGreaterEqual(ember["needs"]["health"], 0.2)
+        self.assertTrue(any(task["created_by"] == "civic-survival" and task["assigned_agent_id"] == "ember" for task in state["tasks"]))
+        self.assertTrue(any(event["kind"] == "survival.emergency_food_rescue" and event["actor_agent_id"] == "ember" for event in state["events"]))
+
+    def test_catastrophic_starvation_still_happens_without_public_rescue_capacity(self) -> None:
+        with connect(self.db_path) as conn:
+            conn.execute("UPDATE agents SET credits=0, state='dead' WHERE id IN ('civic-government', 'credit-bank')")
+            conn.execute("UPDATE agents SET credits=0, mood=0.5, energy=0.5, state='idle', current_task_id=NULL WHERE id='ember'")
+            conn.execute("UPDATE agent_needs SET nutrition=0.0, health=0.03, rest=0.2, safety=0.2 WHERE agent_id='ember'")
+
+        self.engine.tick(steps=1)
+
+        state = self.engine.snapshot()
+        ember = next(agent for agent in state["agents"] if agent["id"] == "ember")
+        self.assertEqual(ember["state"], "starved")
         self.assertEqual(ember["needs"]["nutrition"], 0)
         self.assertTrue(any(event["kind"] == "survival.starved" and event["actor_agent_id"] == "ember" for event in state["events"]))
+
+    def test_starved_agent_can_be_revived_by_emergency_food_rescue(self) -> None:
+        with connect(self.db_path) as conn:
+            conn.execute("UPDATE agents SET credits=100 WHERE id='civic-government'")
+            conn.execute("UPDATE agents SET credits=0, mood=0, energy=0, state='starved', current_task_id=NULL WHERE id='ember'")
+            conn.execute("UPDATE agent_needs SET nutrition=0, health=0, rest=0, fun=0, safety=0 WHERE agent_id='ember'")
+
+        self.engine.tick(steps=1)
+
+        state = self.engine.snapshot()
+        ember = next(agent for agent in state["agents"] if agent["id"] == "ember")
+        self.assertEqual(ember["state"], "recovering")
+        self.assertGreaterEqual(ember["needs"]["nutrition"], 0.5)
+        self.assertGreaterEqual(ember["needs"]["health"], 0.2)
+        self.assertTrue(
+            any(
+                event["kind"] == "survival.emergency_food_rescue"
+                and json_loads(event["payload_json"]).get("revived")
+                for event in state["events"]
+            )
+        )
 
     def test_hungry_broke_agent_creates_survival_job(self) -> None:
         with connect(self.db_path) as conn:

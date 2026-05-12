@@ -118,8 +118,9 @@ flowchart LR
 ## Tick Loop
 
 1. Apply living costs: nutrition decays, rent comes due, hungry agents buy food,
-   broke hungry agents seek survival work, and collapsed broke agents can
-   starve.
+   broke hungry agents seek survival work, collapsed broke agents receive an
+   emergency meal voucher when public rescue capacity exists, and only fully
+   unsupported collapse can starve.
 2. Interrupt medically or nutritionally unsafe work and send critical agents to
    food, emergency care, or forced home rest.
 3. Assign idle, healthy agents to matching open tasks. Role matching is

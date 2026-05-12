@@ -69,6 +69,8 @@ MEAL_TRIGGER_NUTRITION = 0.62
 CRITICAL_MEAL_NUTRITION = 0.28
 FOOD_RESERVE_MEALS = 2
 SURVIVAL_JOB_REWARD = 56
+EMERGENCY_FOOD_NUTRITION_FLOOR = 0.58
+EMERGENCY_FOOD_HEALTH_FLOOR = 0.22
 
 NEED_KEYS = ("rest", "social", "fun", "purpose", "safety", "health", "nutrition")
 
@@ -1182,6 +1184,7 @@ class WorldEngine:
         for agent in agents:
             agent_id = agent["id"]
             if self._is_dead(agent):
+                self._emergency_food_rescue(conn, agent, tick_no, summary, revived=True)
                 continue
             if self._maybe_survival_action(conn, agent, tick_no, summary):
                 continue
@@ -1278,6 +1281,8 @@ class WorldEngine:
             and needs["health"] <= STARVATION_HEALTH
             and int(agent["credits"]) < food_price
         ):
+            if self._emergency_food_rescue(conn, agent, tick_no, summary):
+                return True
             self._starve_agent(conn, agent, tick_no, summary, food_price)
             return True
 
@@ -1287,6 +1292,9 @@ class WorldEngine:
         food = self._affordable_food_venue(conn, int(agent["credits"]))
         if food is not None:
             self._buy_food(conn, agent, food, tick_no, summary)
+            return True
+
+        if needs["nutrition"] <= CRITICAL_MEAL_NUTRITION and self._emergency_food_rescue(conn, agent, tick_no, summary):
             return True
 
         self._ensure_survival_job(conn, agent, tick_no, food_price)
@@ -1329,6 +1337,78 @@ class WorldEngine:
             (credits,),
         ).fetchone()
 
+    def _public_food_payer(self, conn, price: int) -> str | None:
+        for payer in ("civic-government", "credit-bank"):
+            row = conn.execute("SELECT credits FROM agents WHERE id=? AND state NOT IN ('starved', 'dead')", (payer,)).fetchone()
+            if row is not None and int(row["credits"]) >= price:
+                return payer
+        return None
+
+    def _emergency_food_rescue(self, conn, agent, tick_no: int, summary: dict[str, Any], revived: bool = False) -> bool:
+        venue = conn.execute("SELECT * FROM venues WHERE kind='food' AND price > 0 ORDER BY price ASC LIMIT 1").fetchone()
+        if venue is None:
+            return False
+        price = int(venue["price"])
+        payer = self._public_food_payer(conn, price)
+        if payer is None:
+            return False
+
+        self._interrupt_current_task_for_survival(conn, agent["id"], "emergency_food_rescue")
+        self._credit(conn, payer, -price, "public_food_rescue", "agent", agent["id"])
+        conn.execute(
+            "INSERT INTO visits (agent_id, venue_id, cost) VALUES (?, ?, ?)",
+            (agent["id"], venue["id"], price),
+        )
+        current = self._need_dict(conn, agent["id"])
+        conn.execute(
+            """
+            UPDATE agent_needs
+            SET nutrition=?, health=?, rest=?, fun=?, safety=?, updated_at=CURRENT_TIMESTAMP
+            WHERE agent_id=?
+            """,
+            (
+                max(float(current.get("nutrition", 0.0)), EMERGENCY_FOOD_NUTRITION_FLOOR),
+                max(float(current.get("health", 0.0)), EMERGENCY_FOOD_HEALTH_FLOOR),
+                max(float(current.get("rest", 0.0)), 0.24),
+                max(float(current.get("fun", 0.0)), 0.08),
+                max(float(current.get("safety", 0.0)), 0.34),
+                agent["id"],
+            ),
+        )
+        self._set_emotions(conn, agent["id"], stress=-0.35, anger=-0.1, joy=0.08, confidence=0.04, loneliness=-0.04)
+        conn.execute(
+            """
+            UPDATE agents
+            SET current_task_id=NULL, current_training_id=NULL, state=?, mood=?, energy=?, updated_at=CURRENT_TIMESTAMP
+            WHERE id=?
+            """,
+            (
+                "recovering" if revived else "eating",
+                max(clamp(float(agent["mood"]) + 0.12), 0.24),
+                max(clamp(float(agent["energy"]) + 0.16), 0.28),
+                agent["id"],
+            ),
+        )
+        self._ensure_survival_job(conn, agent, tick_no, price, allow_unfit=True)
+        self._memory(
+            conn,
+            agent["id"],
+            "emergency_food_rescue",
+            0.18 if revived else 0.12,
+            0.9,
+            f"政府/银行使用 {price} agent-credits 应急饭票让 {agent['name']} 先活下来，之后再通过合法临工补回生存现金流。",
+        )
+        self._event(
+            conn,
+            "survival.emergency_food_rescue",
+            agent["id"],
+            {"venue": venue["id"], "cost": price, "payer": payer, "revived": revived},
+        )
+        summary["survival"].append(
+            {"agent": agent["id"], "action": "emergency_food_rescue", "venue": venue["id"], "cost": price, "payer": payer, "revived": revived}
+        )
+        return True
+
     def _survival_reserve(self, conn, agent) -> int:
         reserve = self._minimum_food_price(conn) * FOOD_RESERVE_MEALS
         residence = self._agent_residence(conn, agent["id"])
@@ -1365,7 +1445,7 @@ class WorldEngine:
         self._event(conn, "survival.ate_meal", agent["id"], {"venue": venue["id"], "cost": price, "nutrition_gain": round(nutrition_gain, 3)})
         summary["survival"].append({"agent": agent["id"], "action": "ate_meal", "venue": venue["id"], "cost": price})
 
-    def _ensure_survival_job(self, conn, agent, tick_no: int, meal_cost: int) -> int | None:
+    def _ensure_survival_job(self, conn, agent, tick_no: int, meal_cost: int, allow_unfit: bool = False) -> int | None:
         existing = conn.execute(
             """
             SELECT id
@@ -1380,7 +1460,7 @@ class WorldEngine:
         ).fetchone()
         if existing is not None:
             return int(existing["id"])
-        if self._is_unfit_for_work(conn, agent, ignore_nutrition=True):
+        if not allow_unfit and self._is_unfit_for_work(conn, agent, ignore_nutrition=True):
             return None
         reward = max(SURVIVAL_JOB_REWARD, meal_cost * 5)
         task_id = self._create_task_in_conn(

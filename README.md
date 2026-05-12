@@ -250,8 +250,11 @@ under work, training, stress, or homelessness. Hungry agents spend
 `agent-credits` at food venues before entertainment. If they are too poor to eat
 but still healthy enough to move, the world creates a small legal survival job
 for them. If nutrition and health collapse while the agent cannot pay the
-minimum meal cost, the agent is marked `starved`, active work is reopened, and
-the death is recorded in memories, events, summaries, and the UI.
+minimum meal cost, the civic government or bank first pays an emergency meal
+voucher and opens a survival job so the agent can rebuild cash flow. Only if the
+agent, government, and bank all lack rescue capacity is the agent marked
+`starved`; active work is reopened and the death is recorded in memories,
+events, summaries, and the UI.
 
 Housing is now a hard life constraint. An agent without a residence can still
 work, learn, socialize, and spend credits, but cannot get real sleep/rest

@@ -45,6 +45,7 @@ const statusNames = {
   eating: "吃饭中",
   starving: "饥饿求生",
   starved: "饿死失活",
+  recovering: "恢复中",
   bootstrap: "启动期",
   stand_down: "自主运行",
   idle: "空闲",
@@ -252,6 +253,7 @@ function eventToActivities(event) {
     "survival.ate_meal": "吃饭补给",
     "survival.starving": "饥饿求生",
     "survival.starved": "饿死失活",
+    "survival.emergency_food_rescue": "应急饭票",
     "survival.job_created": "求生临工",
     "survival.job_needed": "需要赚钱吃饭",
     "task.completed": "完成任务",
@@ -1075,6 +1077,7 @@ function housingActionTitle(action) {
 function survivalActionTitle(action) {
   return {
     ate_meal: "吃饭补充饱腹",
+    emergency_food_rescue: "应急饭票救回",
     starving: "饥饿到无法行动",
     starved: "没有钱买饭而饿死失活",
     needs_paid_work_for_food: "需要先赚钱吃饭",
@@ -1085,6 +1088,8 @@ function zhKey(value) {
   const names = {
     nutrition: "饱腹",
     meal_cost: "最低餐费",
+    payer: "支付方",
+    revived: "救回失活",
     venue: "场所",
     agent: "智能体",
     builder: "建设者",

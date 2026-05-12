@@ -209,6 +209,7 @@ def _zh_status(value: str) -> str:
         "eating": "吃饭中",
         "starving": "饥饿求生",
         "starved": "饿死失活",
+        "recovering": "恢复中",
         "done": "完成",
         "open": "开放",
         "in_progress": "进行中",
