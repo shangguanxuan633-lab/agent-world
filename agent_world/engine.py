@@ -62,6 +62,15 @@ SKILL_PACKAGE_REQUIRED_HEADINGS = (
 MIN_HEALTH_FOR_WORK = 0.25
 MAX_STRESS_FOR_WORK = 0.82
 MIN_MOOD_FOR_WORK = 0.08
+MIN_NUTRITION_FOR_WORK = 0.2
+STARVATION_NUTRITION = 0.035
+STARVATION_HEALTH = 0.08
+MEAL_TRIGGER_NUTRITION = 0.62
+CRITICAL_MEAL_NUTRITION = 0.28
+FOOD_RESERVE_MEALS = 2
+SURVIVAL_JOB_REWARD = 56
+
+NEED_KEYS = ("rest", "social", "fun", "purpose", "safety", "health", "nutrition")
 
 ROLE_TASK_COMPATIBILITY = {
     "researcher": ("researcher", "documentarian"),
@@ -1147,6 +1156,7 @@ class WorldEngine:
             "monetaryPolicy": [],
             "company": [],
             "housing": [],
+            "survival": [],
             "identity": [],
             "randomFactors": [],
         }
@@ -1171,6 +1181,13 @@ class WorldEngine:
         agents = conn.execute("SELECT * FROM agents ORDER BY id").fetchall()
         for agent in agents:
             agent_id = agent["id"]
+            if self._is_dead(agent):
+                continue
+            if self._maybe_survival_action(conn, agent, tick_no, summary):
+                continue
+            agent = conn.execute("SELECT * FROM agents WHERE id=?", (agent_id,)).fetchone()
+            if agent is None or self._is_dead(agent):
+                continue
             text_shift = self._maybe_drift_text_profile(conn, agent, tick_no)
             if text_shift:
                 summary["identity"].append(text_shift)
@@ -1227,6 +1244,193 @@ class WorldEngine:
             summary["monetaryPolicy"].append(policy)
         self._event(conn, "world.tick", "atlas", summary)
         return summary
+
+    def _is_dead(self, agent) -> bool:
+        return str(agent["state"]) in {"starved", "dead"}
+
+    def _maybe_survival_action(self, conn, agent, tick_no: int, summary: dict[str, Any]) -> bool:
+        if self._is_dead(agent):
+            return True
+
+        needs = self._need_dict(conn, agent["id"])
+        stress = self._emotion_dict(conn, agent["id"])["stress"]
+        housed = self._agent_residence(conn, agent["id"]) is not None
+        work_pressure = 0.018 if agent["current_task_id"] is not None or agent["current_training_id"] is not None else 0.0
+        shelter_pressure = 0.009 if not housed else 0.0
+        stress_pressure = 0.01 if stress > 0.68 else 0.0
+        nutrition_decay = self._jitter_delta(
+            conn,
+            f"survival.metabolism.{agent['id']}",
+            tick_no,
+            0.034 + work_pressure + shelter_pressure + stress_pressure,
+            0.018,
+        )
+        self._set_needs(conn, agent["id"], nutrition=-nutrition_decay)
+        needs = self._need_dict(conn, agent["id"])
+
+        food_price = self._minimum_food_price(conn)
+        if needs["nutrition"] < 0.42:
+            self._set_needs(conn, agent["id"], health=-0.018 if needs["nutrition"] < CRITICAL_MEAL_NUTRITION else -0.006, rest=-0.012, safety=-0.018)
+            self._set_emotions(conn, agent["id"], stress=0.045, joy=-0.025, anger=0.012)
+
+        if (
+            needs["nutrition"] <= STARVATION_NUTRITION
+            and needs["health"] <= STARVATION_HEALTH
+            and int(agent["credits"]) < food_price
+        ):
+            self._starve_agent(conn, agent, tick_no, summary, food_price)
+            return True
+
+        if needs["nutrition"] >= MEAL_TRIGGER_NUTRITION:
+            return False
+
+        food = self._affordable_food_venue(conn, int(agent["credits"]))
+        if food is not None:
+            self._buy_food(conn, agent, food, tick_no, summary)
+            return True
+
+        self._ensure_survival_job(conn, agent, tick_no, food_price)
+        if needs["nutrition"] <= MIN_NUTRITION_FOR_WORK:
+            self._interrupt_current_task_for_survival(conn, agent["id"], "nutrition")
+            conn.execute(
+                """
+                UPDATE agents
+                SET state='starving', mood=?, energy=?, updated_at=CURRENT_TIMESTAMP
+                WHERE id=?
+                """,
+                (
+                    clamp(float(agent["mood"]) - 0.06),
+                    clamp(float(agent["energy"]) - 0.05),
+                    agent["id"],
+                ),
+            )
+            self._memory(conn, agent["id"], "starving_no_food", -0.72, 0.9, "饱腹度跌破工作红线但没有足够 credits 买饭，只能停止行动并等待求生机会。")
+            self._event(conn, "survival.starving", agent["id"], {"nutrition": round(needs["nutrition"], 3), "credits": agent["credits"], "meal_cost": food_price})
+            summary["survival"].append({"agent": agent["id"], "action": "starving", "nutrition": round(needs["nutrition"], 3), "meal_cost": food_price})
+            return True
+
+        self._event(conn, "survival.job_needed", agent["id"], {"nutrition": round(needs["nutrition"], 3), "credits": agent["credits"], "meal_cost": food_price})
+        summary["survival"].append({"agent": agent["id"], "action": "needs_paid_work_for_food", "nutrition": round(needs["nutrition"], 3), "meal_cost": food_price})
+        return False
+
+    def _minimum_food_price(self, conn) -> int:
+        row = conn.execute("SELECT MIN(price) AS price FROM venues WHERE kind='food' AND price > 0").fetchone()
+        return int(row["price"] or 9)
+
+    def _affordable_food_venue(self, conn, credits: int):
+        return conn.execute(
+            """
+            SELECT *
+            FROM venues
+            WHERE kind='food' AND price > 0 AND price <= ?
+            ORDER BY price ASC, energy_delta DESC
+            LIMIT 1
+            """,
+            (credits,),
+        ).fetchone()
+
+    def _survival_reserve(self, conn, agent) -> int:
+        reserve = self._minimum_food_price(conn) * FOOD_RESERVE_MEALS
+        residence = self._agent_residence(conn, agent["id"])
+        if residence is not None and int(residence["monthly_rent"] or 0) > 0:
+            current_tick = self._current_tick(conn)
+            due_in = 30 - (current_tick - int(residence["last_rent_tick"] or 0))
+            if due_in <= 5:
+                reserve += int(residence["monthly_rent"])
+        return reserve
+
+    def _buy_food(self, conn, agent, venue, tick_no: int, summary: dict[str, Any]) -> None:
+        price = int(venue["price"])
+        self._credit(conn, agent["id"], -price, "food_meal", "venue", venue["id"])
+        conn.execute(
+            "INSERT INTO visits (agent_id, venue_id, cost) VALUES (?, ?, ?)",
+            (agent["id"], venue["id"], price),
+        )
+        nutrition_gain = self._jitter_delta(conn, f"food.nutrition.{agent['id']}.{venue['id']}", tick_no, 0.42 if price <= 10 else 0.52, 0.045)
+        mood_delta = self._jitter_delta(conn, f"food.mood.{agent['id']}.{venue['id']}", tick_no, venue["mood_delta"], 0.035)
+        energy_delta = self._jitter_delta(conn, f"food.energy.{agent['id']}.{venue['id']}", tick_no, venue["energy_delta"], 0.035)
+        self._set_needs(conn, agent["id"], nutrition=nutrition_gain, health=0.035, rest=0.018, safety=0.018)
+        self._set_emotions(conn, agent["id"], joy=mood_delta, stress=-0.055, anger=-0.025, confidence=0.015)
+        conn.execute(
+            """
+            UPDATE agents
+            SET state='eating', mood=?, energy=?, updated_at=CURRENT_TIMESTAMP
+            WHERE id=?
+            """,
+            (clamp(float(agent["mood"]) + mood_delta), clamp(float(agent["energy"]) + energy_delta), agent["id"]),
+        )
+        if venue["skill_tag"]:
+            self._upsert_skill(conn, agent["id"], venue["skill_tag"], 0.02, "food", venue["name"], tick_no)
+        self._memory(conn, agent["id"], "meal", 0.24, 0.58, f"花费 {price} agent-credits 在 {venue['name']} 吃饭，先把自己活下来。")
+        self._event(conn, "survival.ate_meal", agent["id"], {"venue": venue["id"], "cost": price, "nutrition_gain": round(nutrition_gain, 3)})
+        summary["survival"].append({"agent": agent["id"], "action": "ate_meal", "venue": venue["id"], "cost": price})
+
+    def _ensure_survival_job(self, conn, agent, tick_no: int, meal_cost: int) -> int | None:
+        existing = conn.execute(
+            """
+            SELECT id
+            FROM tasks
+            WHERE status IN ('open', 'in_progress')
+              AND assigned_agent_id=?
+              AND created_by='civic-survival'
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (agent["id"],),
+        ).fetchone()
+        if existing is not None:
+            return int(existing["id"])
+        if self._is_unfit_for_work(conn, agent, ignore_nutrition=True):
+            return None
+        reward = max(SURVIVAL_JOB_REWARD, meal_cost * 5)
+        task_id = self._create_task_in_conn(
+            conn,
+            f"{agent['name']}：求生临工",
+            "饱腹度和现金储备过低，优先完成一个低门槛合法临工来支付下一餐和基本住宿压力。",
+            reward,
+            assigned_agent_id=agent["id"],
+            created_by="civic-survival",
+            actor_agent_id="civic-government",
+        )
+        self._event(conn, "survival.job_created", agent["id"], {"task_id": task_id, "reward": reward, "meal_cost": meal_cost})
+        return task_id
+
+    def _interrupt_current_task_for_survival(self, conn, agent_id: str, reason: str) -> None:
+        row = conn.execute("SELECT current_task_id FROM agents WHERE id=?", (agent_id,)).fetchone()
+        if row is None or row["current_task_id"] is None:
+            return
+        task_id = int(row["current_task_id"])
+        task = conn.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
+        if task is not None and task["status"] in ("open", "in_progress"):
+            conn.execute("UPDATE tasks SET status='open', updated_at=CURRENT_TIMESTAMP WHERE id=?", (task_id,))
+        conn.execute("UPDATE agents SET current_task_id=NULL, updated_at=CURRENT_TIMESTAMP WHERE id=?", (agent_id,))
+        self._event(conn, "work.interrupted_for_survival", agent_id, {"task_id": task_id, "reason": reason})
+
+    def _starve_agent(self, conn, agent, tick_no: int, summary: dict[str, Any], meal_cost: int) -> None:
+        self._interrupt_current_task_for_survival(conn, agent["id"], "starved")
+        conn.execute(
+            """
+            UPDATE agents
+            SET current_task_id=NULL, current_training_id=NULL, state='starved',
+                mood=0, energy=0, updated_at=CURRENT_TIMESTAMP
+            WHERE id=?
+            """,
+            (agent["id"],),
+        )
+        current = self._need_dict(conn, agent["id"])
+        conn.execute(
+            """
+            UPDATE agent_needs
+            SET rest=0, social=?, fun=0, purpose=0, safety=0, health=0, nutrition=0,
+                updated_at=CURRENT_TIMESTAMP
+            WHERE agent_id=?
+            """,
+            (current.get("social", 0.0), agent["id"]),
+        )
+        self._set_emotions(conn, agent["id"], joy=-1.0, anger=-0.2, stress=0.2, confidence=-1.0, loneliness=0.12, curiosity=-0.4)
+        self._memory(conn, agent["id"], "starved", -1.0, 1.0, f"因为没有足够 credits 支付 {meal_cost} agent-credits 的最低餐食，最终饿死/失活。")
+        self._event(conn, "survival.starved", agent["id"], {"meal_cost": meal_cost, "tick": tick_no})
+        summary["survival"].append({"agent": agent["id"], "action": "starved", "meal_cost": meal_cost})
 
     def _current_training(self, conn, agent) -> Any | None:
         training_id = agent["current_training_id"]
@@ -1299,6 +1503,7 @@ class WorldEngine:
             fun=-0.025,
             purpose=0.045,
             health=-0.012 * program["intensity"],
+            nutrition=-0.018 * program["intensity"],
         )
         self._set_emotions(
             conn,
@@ -1387,11 +1592,13 @@ class WorldEngine:
     def _claimable_assigned_roles(self, role: str) -> tuple[str, ...]:
         return ROLE_TASK_COMPATIBILITY.get(role, (role,))
 
-    def _is_unfit_for_work(self, conn, agent) -> bool:
+    def _is_unfit_for_work(self, conn, agent, ignore_nutrition: bool = False) -> bool:
         needs = self._need_dict(conn, agent["id"])
         emotion = self._emotion_dict(conn, agent["id"])
         return (
-            needs["health"] < MIN_HEALTH_FOR_WORK
+            self._is_dead(agent)
+            or needs["health"] < MIN_HEALTH_FOR_WORK
+            or (not ignore_nutrition and needs.get("nutrition", 1.0) < MIN_NUTRITION_FOR_WORK)
             or emotion["stress"] > MAX_STRESS_FOR_WORK
             or float(agent["mood"]) < MIN_MOOD_FOR_WORK
         )
@@ -2132,7 +2339,7 @@ class WorldEngine:
         new_progress = min(100.0, task["progress"] + effort)
         new_energy = clamp(agent["energy"] + self._jitter_delta(conn, f"task.energy.{agent['id']}.{task['id']}", tick_no, -0.045, 0.045))
         new_mood = clamp(agent["mood"] + self._jitter_delta(conn, f"task.mood.{agent['id']}.{task['id']}", tick_no, -0.01 + skill_level * 0.01, 0.045))
-        self._set_needs(conn, agent["id"], rest=-0.055, social=-0.02, fun=-0.045, purpose=0.06, health=-0.026)
+        self._set_needs(conn, agent["id"], rest=-0.055, social=-0.02, fun=-0.045, purpose=0.06, health=-0.026, nutrition=-0.028)
         self._set_emotions(conn, agent["id"], stress=0.035, anger=0.018 * self._stubbornness(agent), confidence=0.01)
         conn.execute(
             "UPDATE tasks SET progress=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
@@ -2176,7 +2383,7 @@ class WorldEngine:
         self._judge_document(conn, artifact_id, tick_no)
         self._maybe_complete_company_job(conn, agent, task, artifact_id, tick_no)
         self._set_emotions(conn, agent["id"], joy=0.1, stress=-0.05, confidence=0.08, anger=-0.04)
-        self._set_needs(conn, agent["id"], purpose=0.08, fun=-0.03, health=-0.01)
+        self._set_needs(conn, agent["id"], purpose=0.08, fun=-0.03, health=-0.01, nutrition=-0.012)
         self._memory(conn, agent["id"], "work_completed", 0.35, 0.75, f"完成付费工作：{task['title']}。")
         completion_factor = self._random_factor(conn, f"task.effort.{agent['id']}.{task['id']}", tick_no, 0.075)
         self._event(
@@ -2591,6 +2798,12 @@ class WorldEngine:
             self._memory(conn, agent["id"], "no_home_rest_blocked", -0.32, 0.6, "没有住所，不能使用睡眠休息来恢复。")
             self._event(conn, "housing.no_rest_without_home", agent["id"], {"preferred": "rest_venue"})
             return False
+        reserve = self._survival_reserve(conn, agent)
+        spendable = int(agent["credits"]) - reserve
+        if preferred_kind in {"hospital", "gym"}:
+            spendable = max(spendable, int(agent["credits"]) - self._minimum_food_price(conn))
+        if spendable <= 0:
+            return False
         venue = conn.execute(
             """
             SELECT * FROM venues
@@ -2598,7 +2811,7 @@ class WorldEngine:
             ORDER BY CASE WHEN kind=? THEN 0 ELSE 1 END, mood_delta DESC, price ASC
             LIMIT 1
             """,
-            (agent["credits"], preferred_kind),
+            (spendable, preferred_kind),
         ).fetchone()
         if venue is None:
             return False
@@ -2667,7 +2880,7 @@ class WorldEngine:
         query = self._research_query(agent, skill_name)
         delta = (0.035 + self_drive * 0.055) * self._random_factor(conn, f"research.skill.{agent['id']}.{skill_name}", tick_no, 0.06)
         self._upsert_skill(conn, agent["id"], skill_name, delta, "autonomous-web-research", query, tick_no)
-        self._set_needs(conn, agent["id"], rest=-0.02, fun=-0.015, purpose=0.035, health=-0.006)
+        self._set_needs(conn, agent["id"], rest=-0.02, fun=-0.015, purpose=0.035, health=-0.006, nutrition=-0.01)
         self._set_emotions(conn, agent["id"], joy=0.025, curiosity=0.015, stress=0.012)
         cur = conn.execute(
             """
@@ -2717,7 +2930,7 @@ class WorldEngine:
         if today_count >= 2:
             return None
         report_id = self._create_financial_report_in_conn(conn, agent, topic, tick_no)
-        self._set_needs(conn, agent["id"], rest=-0.035, fun=-0.015, purpose=0.04, health=-0.008)
+        self._set_needs(conn, agent["id"], rest=-0.035, fun=-0.015, purpose=0.04, health=-0.008, nutrition=-0.014)
         self._set_emotions(conn, agent["id"], joy=0.02, curiosity=0.025, stress=0.014)
         return report_id
 
@@ -2784,7 +2997,7 @@ class WorldEngine:
         )
         project_id = int(cur.lastrowid)
         self._credit(conn, agent["id"], -cost, "autonomous_construction_investment", "construction_project", str(project_id))
-        self._set_needs(conn, agent["id"], purpose=0.08, rest=-0.04, fun=-0.025, health=-0.026)
+        self._set_needs(conn, agent["id"], purpose=0.08, rest=-0.04, fun=-0.025, health=-0.026, nutrition=-0.022)
         self._set_emotions(conn, agent["id"], confidence=0.045, stress=0.035, joy=0.02)
         self._memory(conn, agent["id"], "autonomous_construction_started", 0.28, 0.66, f"攒够 credits 后，自主投资建设 {name}。")
         self._event(
@@ -3635,6 +3848,8 @@ class WorldEngine:
             + emotion["confidence"] * 0.22
             + emotion["joy"] * 0.16
             + needs["purpose"] * 0.12
+            + needs.get("nutrition", 1.0) * 0.1
+            + needs["health"] * 0.12
             + affinity * 0.11
             + trust * 0.12
             - tension * 0.2
@@ -3676,7 +3891,7 @@ class WorldEngine:
         if row is None:
             seed_agent_life_state(conn)
             row = conn.execute("SELECT * FROM agent_needs WHERE agent_id=?", (agent_id,)).fetchone()
-        return {key: float(row[key]) for key in ("rest", "social", "fun", "purpose", "safety", "health")}
+        return {key: float(row[key]) for key in NEED_KEYS}
 
     def _text_profile_dict(self, conn, agent_id: str) -> dict[str, Any]:
         row = conn.execute("SELECT * FROM agent_text_profiles WHERE agent_id=?", (agent_id,)).fetchone()
@@ -3722,7 +3937,9 @@ class WorldEngine:
         else:
             tone = "情绪暂时平稳，更多是在观察 credits、技能和关系的长期变化。"
 
-        if occupied_home is None:
+        if needs.get("nutrition", 1.0) < 0.42:
+            desire = "先解决下一餐和最低生活费；没有饭吃时，所有技能、工资和野心都会让位给活下来。"
+        elif occupied_home is None:
             desire = "先赚到足够 credits 租房或买房；没有住所时，休息这件事会一直压在心里。"
         elif greed > 0.74 and int(agent["credits"]) > 400:
             desire = "想继续攒钱、买资产、出租给别人，用被动租金抵消生活成本。"
@@ -3733,7 +3950,9 @@ class WorldEngine:
         else:
             desire = "想找到下一个能提升技能、关系或 credits 的机会。"
 
-        if int(agent["credits"]) < 120:
+        if needs.get("nutrition", 1.0) < 0.28 and int(agent["credits"]) < self._minimum_food_price(conn):
+            fear = "担心没有足够 credits 买下一顿饭，饱腹度继续下降后会真正饿死。"
+        elif int(agent["credits"]) < 120:
             fear = "担心 credits 太少，无法支付训练、娱乐、医疗或住房成本。"
         elif occupied_home is None:
             fear = "担心长期无房导致无法真正休息，最后被压力拖垮。"
@@ -3831,7 +4050,7 @@ class WorldEngine:
         conn.execute(
             """
             UPDATE agent_needs
-            SET rest=?, social=?, fun=?, purpose=?, safety=?, health=?, updated_at=CURRENT_TIMESTAMP
+            SET rest=?, social=?, fun=?, purpose=?, safety=?, health=?, nutrition=?, updated_at=CURRENT_TIMESTAMP
             WHERE agent_id=?
             """,
             (
@@ -3841,6 +4060,7 @@ class WorldEngine:
                 values["purpose"],
                 values["safety"],
                 values["health"],
+                values["nutrition"],
                 agent_id,
             ),
         )

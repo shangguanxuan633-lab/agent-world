@@ -42,6 +42,9 @@ const roleNames = {
 };
 
 const statusNames = {
+  eating: "吃饭中",
+  starving: "饥饿求生",
+  starved: "饿死失活",
   bootstrap: "启动期",
   stand_down: "自主运行",
   idle: "空闲",
@@ -151,6 +154,7 @@ const sourceNames = {
 };
 
 const metricNames = {
+  nutrition: "饱腹",
   joy: "愉悦",
   anger: "愤怒",
   stress: "压力",
@@ -245,6 +249,11 @@ function eventToActivities(event) {
   }
   const actor = event.actor_agent_id || payload.agent || payload.owner || "world";
   const kindNames = {
+    "survival.ate_meal": "吃饭补给",
+    "survival.starving": "饥饿求生",
+    "survival.starved": "饿死失活",
+    "survival.job_created": "求生临工",
+    "survival.job_needed": "需要赚钱吃饭",
     "task.completed": "完成任务",
     "venue.visited": "场所消费",
     "skill.autonomous_research": "自主学习",
@@ -332,6 +341,9 @@ function tickToActivities(event, payload) {
   }
   for (const row of payload.housing || []) {
     push(`housing-${row.agent || "world"}-${row.action}-${row.residence || event.id}`, "住房", row.agent || "civic-government", housingActionTitle(row.action), compactDetail(row), compactAgentIds(row));
+  }
+  for (const row of payload.survival || []) {
+    push(`survival-${row.agent || "world"}-${row.action}-${row.venue || row.meal_cost || event.id}`, "生存", row.agent || "civic-government", survivalActionTitle(row.action), compactDetail(row), compactAgentIds(row));
   }
   for (const row of payload.identity || []) {
     push(`identity-${row.agent}-${row.version}`, "身份", row.agent, "个人文本模型更新", compactDetail(row), [row.agent]);
@@ -710,7 +722,7 @@ function renderAgents() {
       <strong>${escapeHtml(agent.name)} <span class="badge">${escapeHtml(zhRole(agent.role))}</span></strong>
       ${taskText ? `<span class="worker-line"><span class="worker-badge">正在执行</span>${escapeHtml(taskText.replace(" - ", ""))}</span>` : ""}
       <span>${escapeHtml(zhStatus(agent.state))} - ${agent.credits} agent-credits - 心情 ${agent.mood.toFixed(2)} - 精力 ${agent.energy.toFixed(2)}</span>
-      <span>愤怒 ${agent.emotions.anger.toFixed(2)} - 压力 ${agent.emotions.stress.toFixed(2)} - 开心 ${agent.needs.fun.toFixed(2)} - 健康 ${agent.needs.health.toFixed(2)}</span>
+      <span>愤怒 ${agent.emotions.anger.toFixed(2)} - 压力 ${agent.emotions.stress.toFixed(2)} - 开心 ${agent.needs.fun.toFixed(2)} - 健康 ${agent.needs.health.toFixed(2)} - 饱腹 ${Number(agent.needs.nutrition || 0).toFixed(2)}</span>
       <span>${escapeHtml(skills || "暂无技能")}</span>
     </div>`;
   }).join("");
@@ -817,6 +829,7 @@ function renderDetail() {
     ["fun", agent.needs.fun],
     ["purpose", agent.needs.purpose],
     ["health", agent.needs.health],
+    ["nutrition", agent.needs.nutrition],
   ];
   const textProfile = agent.textProfile || {};
   el.innerHTML = `<div class="item">
@@ -1059,8 +1072,20 @@ function housingActionTitle(action) {
   }[action] || "住房状态变化";
 }
 
+function survivalActionTitle(action) {
+  return {
+    ate_meal: "吃饭补充饱腹",
+    starving: "饥饿到无法行动",
+    starved: "没有钱买饭而饿死失活",
+    needs_paid_work_for_food: "需要先赚钱吃饭",
+  }[action] || "生存状态变化";
+}
+
 function zhKey(value) {
   const names = {
+    nutrition: "饱腹",
+    meal_cost: "最低餐费",
+    venue: "场所",
     agent: "智能体",
     builder: "建设者",
     owner: "所有者",

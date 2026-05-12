@@ -83,6 +83,7 @@ CREATE TABLE IF NOT EXISTS agent_needs (
   purpose REAL NOT NULL DEFAULT 0.62,
   safety REAL NOT NULL DEFAULT 0.75,
   health REAL NOT NULL DEFAULT 0.82,
+  nutrition REAL NOT NULL DEFAULT 0.82,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -560,6 +561,8 @@ def ensure_migrations(conn: sqlite3.Connection) -> None:
     need_columns = {row["name"] for row in conn.execute("PRAGMA table_info(agent_needs)")}
     if "health" not in need_columns:
         conn.execute("ALTER TABLE agent_needs ADD COLUMN health REAL NOT NULL DEFAULT 0.82")
+    if "nutrition" not in need_columns:
+        conn.execute("ALTER TABLE agent_needs ADD COLUMN nutrition REAL NOT NULL DEFAULT 0.82")
 
 
 def reset_db(db_path: Path | str = DEFAULT_DB_PATH) -> None:
@@ -1083,6 +1086,26 @@ def seed_platform_defaults(conn: sqlite3.Connection) -> None:
             "fitness",
             "A gym where agents trade credits and effort for long-term body health.",
         ),
+        (
+            "canteen",
+            "Civic Canteen",
+            "food",
+            9,
+            0.04,
+            0.03,
+            "self-care",
+            "A plain paid meal that keeps an agent alive and able to work.",
+        ),
+        (
+            "grocery",
+            "Market Grocery",
+            "food",
+            14,
+            0.03,
+            0.06,
+            "budgeting",
+            "Groceries that cost more upfront but restore more nutrition.",
+        ),
     ]
     conn.executemany(
         """
@@ -1463,8 +1486,8 @@ def seed_agent_life_state(conn: sqlite3.Connection) -> None:
         conn.execute(
             """
             INSERT OR IGNORE INTO agent_needs
-              (agent_id, rest, social, fun, purpose, safety, health)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+              (agent_id, rest, social, fun, purpose, safety, health, nutrition)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 agent["id"],
@@ -1474,6 +1497,7 @@ def seed_agent_life_state(conn: sqlite3.Connection) -> None:
                 max(0.35, min(0.9, curiosity)),
                 0.76,
                 max(0.32, min(0.96, 0.52 + agent["energy"] * 0.38)),
+                max(0.44, min(0.96, 0.58 + agent["energy"] * 0.3)),
             ),
         )
         genome = default_genome(agent["personality_json"], agent["mood"], agent["energy"])

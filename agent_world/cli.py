@@ -528,7 +528,8 @@ def print_status(state: dict[str, Any]) -> None:
         task = agent["current_task_id"] or "-"
         print(
             f"- {agent['id']:18} {zh_role(agent['role']):8} {zh_status(agent['state']):8} "
-            f"agent-credits={agent['credits']:4} 心情={agent['mood']:.2f} 精力={agent['energy']:.2f} 当前任务={task}"
+            f"agent-credits={agent['credits']:4} 心情={agent['mood']:.2f} 精力={agent['energy']:.2f} "
+            f"饱腹={agent['needs'].get('nutrition', 0):.2f} 当前任务={task}"
         )
 
 
@@ -552,6 +553,9 @@ def zh_role(value: str) -> str:
 
 def zh_status(value: str) -> str:
     return {
+        "eating": "吃饭中",
+        "starving": "饥饿求生",
+        "starved": "饿死失活",
         "bootstrap": "启动期",
         "stand_down": "自主运行",
         "idle": "空闲",

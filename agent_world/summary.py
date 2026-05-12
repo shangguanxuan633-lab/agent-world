@@ -33,6 +33,7 @@ def render_world_summary(state: dict[str, Any]) -> str:
     system_agents = [agent for agent in agents if agent["owner_id"] == "world-system"]
     ordinary_agents = [agent for agent in agents if agent["owner_id"] != "world-system"]
     low_health = sorted(agents, key=lambda agent: agent["needs"].get("health", 1.0))[:5]
+    low_nutrition = sorted(agents, key=lambda agent: agent["needs"].get("nutrition", 1.0))[:5]
     low_fun = sorted(agents, key=lambda agent: agent["needs"].get("fun", 1.0))[:5]
     rich = sorted(agents, key=lambda agent: int(agent["credits"]), reverse=True)[:5]
     lines = [
@@ -100,6 +101,11 @@ def render_world_summary(state: dict[str, Any]) -> str:
     lines.extend(
         f"- {agent['id']}：开心={agent['needs'].get('fun', 0):.2f}，愉悦={agent['emotions'].get('joy', 0):.2f}，压力={agent['emotions'].get('stress', 0):.2f}，状态={_zh_status(agent['state'])}"
         for agent in low_fun
+    )
+    lines.extend(["", "### 饱腹/饮食风险最高的 agent", ""])
+    lines.extend(
+        f"- {agent['id']}：饱腹 {agent['needs'].get('nutrition', 0):.2f}，健康 {agent['needs'].get('health', 0):.2f}，credits={agent['credits']}，状态 {_zh_status(agent['state'])}"
+        for agent in low_nutrition
     )
     lines.extend(["", "## 身份文本模型", ""])
     for agent in agents[:8]:
@@ -200,6 +206,9 @@ def _zh_status(value: str) -> str:
         "leisure": "休闲中",
         "researching": "研究中",
         "training": "训练中",
+        "eating": "吃饭中",
+        "starving": "饥饿求生",
+        "starved": "饿死失活",
         "done": "完成",
         "open": "开放",
         "in_progress": "进行中",

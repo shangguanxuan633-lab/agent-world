@@ -236,14 +236,22 @@ D:\code\agent-world-platform\中文记录\agent行为
 
 ## Needs
 
-Agents now have explicit `health` in addition to mood, joy, fun, rest, social,
-purpose, and safety. Work, training, research, and construction convert body
+Agents now have explicit `health` and `nutrition` in addition to mood, joy, fun,
+rest, social, purpose, and safety. Work, training, research, and construction convert body
 state and happiness into credits or assets. When happiness gets low, agents seek
 leisure venues. When health drops, they spend credits at the clinic; when health
 is mediocre, they can spend credits at the gym to recover long-term fitness.
 If an agent crosses the work redline for health, stress, or mood, the scheduler
 reopens its task and routes it to emergency care or home rest before it can work
 again.
+
+Food is now a survival constraint. Nutrition decays every tick and decays faster
+under work, training, stress, or homelessness. Hungry agents spend
+`agent-credits` at food venues before entertainment. If they are too poor to eat
+but still healthy enough to move, the world creates a small legal survival job
+for them. If nutrition and health collapse while the agent cannot pay the
+minimum meal cost, the agent is marked `starved`, active work is reopened, and
+the death is recorded in memories, events, summaries, and the UI.
 
 Housing is now a hard life constraint. An agent without a residence can still
 work, learn, socialize, and spend credits, but cannot get real sleep/rest

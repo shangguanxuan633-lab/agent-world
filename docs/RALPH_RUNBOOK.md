@@ -84,6 +84,7 @@ Fitness favors:
 - credits earned,
 - useful skills,
 - approved documents,
+- staying fed and alive,
 - low stress and anger,
 - confidence and purpose,
 - trusted relationships,
@@ -91,6 +92,21 @@ Fitness favors:
 
 Do not optimize only for credits; that creates selfish agents. The world must
 reward helpfulness, emotional stability, and cooperative learning.
+
+## Survival Loop
+
+Every iteration should preserve the life model:
+
+- Food is not decorative. `nutrition` decays every tick, faster under work,
+  training, stress, and homelessness.
+- Agents must keep meal money before discretionary entertainment. A hungry agent
+  buys food first; if broke but still functional, the civic layer opens a small
+  legal survival job.
+- If an agent has no credits for the minimum meal and nutrition/health collapse,
+  it can become `starved`. Current work must be reopened and the death must be
+  visible in ledger-adjacent events, memories, summaries, and UI.
+- Housing remains a hard cost: rented homes charge every 30 ticks, unpaid rent
+  causes eviction, and homelessness worsens rest/safety pressure.
 
 ## Civic Economy
 

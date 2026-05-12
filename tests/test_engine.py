@@ -36,7 +36,8 @@ class WorldEngineTest(unittest.TestCase):
         task = next(task for task in state["tasks"] if task["id"] == task_id)
         mira = next(agent for agent in state["agents"] if agent["id"] == "mira")
         self.assertEqual(task["status"], "done")
-        self.assertGreaterEqual(mira["credits"], before["mira"] + 90)
+        self.assertGreaterEqual(mira["credits"], before["mira"])
+        self.assertTrue(any(row["agent_id"] == "mira" and row["reason"] == "task_reward" for row in state["ledger"]))
         self.assertTrue(state["documents"])
         self.assertTrue(state["publicationQueue"])
 
@@ -201,6 +202,61 @@ class WorldEngineTest(unittest.TestCase):
         atlas = next(agent for agent in state["agents"] if agent["id"] == "atlas")
         self.assertEqual(atlas["personality"]["native_language"], "zh-CN")
         self.assertIn("health", atlas["needs"])
+        self.assertIn("nutrition", atlas["needs"])
+
+    def test_hungry_agent_buys_food_before_starving(self) -> None:
+        with connect(self.db_path) as conn:
+            conn.execute("UPDATE agents SET credits=30, state='idle', current_task_id=NULL WHERE id='lumen'")
+            conn.execute("UPDATE agent_needs SET nutrition=0.2, health=0.8, rest=0.8, safety=0.8 WHERE agent_id='lumen'")
+
+        self.engine.tick(steps=1)
+
+        state = self.engine.snapshot()
+        lumen = next(agent for agent in state["agents"] if agent["id"] == "lumen")
+        self.assertEqual(lumen["state"], "eating")
+        self.assertGreater(lumen["needs"]["nutrition"], 0.35)
+        self.assertTrue(any(row["agent_id"] == "lumen" and row["reason"] == "food_meal" for row in state["ledger"]))
+        self.assertTrue(any(event["kind"] == "survival.ate_meal" and event["actor_agent_id"] == "lumen" for event in state["events"]))
+
+    def test_broke_starving_agent_dies_and_reopens_work(self) -> None:
+        task_id = self.engine.create_task(
+            title="不能带饿硬干的任务",
+            description="这个任务会被求生红线打断。",
+            reward=50,
+            assigned_agent_id="ember",
+        )
+        with connect(self.db_path) as conn:
+            conn.execute(
+                "UPDATE agents SET credits=0, mood=0.5, energy=0.5, state='working', current_task_id=? WHERE id='ember'",
+                (task_id,),
+            )
+            conn.execute("UPDATE tasks SET status='in_progress', progress=40 WHERE id=?", (task_id,))
+            conn.execute("UPDATE agent_needs SET nutrition=0.0, health=0.03, rest=0.2, safety=0.2 WHERE agent_id='ember'")
+
+        self.engine.tick(steps=1)
+
+        state = self.engine.snapshot()
+        ember = next(agent for agent in state["agents"] if agent["id"] == "ember")
+        task = next(task for task in state["tasks"] if task["id"] == task_id)
+        self.assertEqual(ember["state"], "starved")
+        self.assertIsNone(ember["current_task_id"])
+        self.assertEqual(task["status"], "open")
+        self.assertEqual(ember["needs"]["nutrition"], 0)
+        self.assertTrue(any(event["kind"] == "survival.starved" and event["actor_agent_id"] == "ember" for event in state["events"]))
+
+    def test_hungry_broke_agent_creates_survival_job(self) -> None:
+        with connect(self.db_path) as conn:
+            conn.execute("UPDATE agents SET credits=0, mood=0.82, energy=0.82, state='idle', current_task_id=NULL WHERE id='forge'")
+            conn.execute("UPDATE agent_needs SET nutrition=0.36, health=0.9, rest=0.8, safety=0.8 WHERE agent_id='forge'")
+
+        self.engine.tick(steps=1)
+
+        state = self.engine.snapshot()
+        jobs = [task for task in state["tasks"] if task["created_by"] == "civic-survival" and task["assigned_agent_id"] == "forge"]
+        forge = next(agent for agent in state["agents"] if agent["id"] == "forge")
+        self.assertTrue(jobs)
+        self.assertIn(jobs[0]["status"], {"open", "in_progress", "done"})
+        self.assertNotEqual(forge["state"], "starved")
 
     def test_low_health_agent_spends_credits_at_clinic(self) -> None:
         with connect(self.db_path) as conn:

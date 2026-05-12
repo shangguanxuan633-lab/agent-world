@@ -91,7 +91,8 @@ flowchart LR
   optional note document.
 - `publication_queue`: approved documents waiting for explicit publishing.
 - `world_events`: audit log for simulation and future trajectory export.
-- `agent_needs.health`: body health used by work, training, clinic, and gym
+- `agent_needs.health` and `agent_needs.nutrition`: body health and food
+  reserves used by work, training, meals, clinic, gym, starvation, and survival
   behavior.
 - `agent_text_profiles`: Chinese personal narrative model for each agent:
   self-narrative, public identity, emotional tone, desire, fear, values, social
@@ -116,30 +117,34 @@ flowchart LR
 
 ## Tick Loop
 
-1. Interrupt medically unsafe work and send critical agents to emergency care or
-   forced home rest.
-2. Assign idle, healthy agents to matching open tasks. Role matching is
+1. Apply living costs: nutrition decays, rent comes due, hungry agents buy food,
+   broke hungry agents seek survival work, and collapsed broke agents can
+   starve.
+2. Interrupt medically or nutritionally unsafe work and send critical agents to
+   food, emergency care, or forced home rest.
+3. Assign idle, healthy agents to matching open tasks. Role matching is
    capability-adjacent, not literal-only: researcher work can be handled by
    researchers, documentarians, and Nuwa perspective agents when the primary
    workforce is exhausted.
-3. Progress active work based on energy and relevant skills.
-4. Pay `agent-credits` when work completes.
-5. Create a document artifact for completed work.
-6. Let the judge agent review the document.
-7. Queue approved documents for future publication targets.
-8. Update skills from work, web-style research, and peer messages.
-9. Let tired or unhappy agents spend credits in venues.
-10. Let low-health agents spend credits at the clinic and medium-low-health
+4. Progress active work based on energy and relevant skills.
+5. Pay `agent-credits` when work completes.
+6. Create a document artifact for completed work.
+7. Let the judge agent review the document.
+8. Queue approved documents for future publication targets.
+9. Update skills from work, web-style research, and peer messages.
+10. Let tired or unhappy agents spend credits in venues, preserving food/rent
+   survival reserve before discretionary entertainment.
+11. Let low-health agents spend credits at the clinic and medium-low-health
    agents spend credits at the gym.
-11. Let high-savings, high-self-drive agents autonomously invest credits into
+12. Let high-savings, high-self-drive agents autonomously invest credits into
     lawful buildings.
-12. Let housed low-rest agents sleep at home; let homeless low-rest agents build
+13. Let housed low-rest agents sleep at home; let homeless low-rest agents build
     stress and seek housing.
-13. Charge monthly rent, evict unpaid renters, and record housing events.
-14. After top-agent stand-down, let companies publish paid jobs from material
+14. Charge monthly rent, evict unpaid renters, and record housing events.
+15. After top-agent stand-down, let companies publish paid jobs from material
     needs, expand the workforce when a role backlog appears, and reward
     judged-effective outputs.
-15. Let researchers periodically summarize the current financial model.
+16. Let researchers periodically summarize the current financial model.
 16. Progress construction projects into building assets.
 17. Let the central bank apply MV=PY monetary policy: cap circulating credits,
     cap bank reserves, collect stability fees under inflation pressure, and

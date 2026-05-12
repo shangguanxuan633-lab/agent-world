@@ -8,8 +8,7 @@ worker.
 Each agent has:
 
 - emotions: joy, anger, stress, confidence, loneliness, curiosity,
-- needs: rest, social, fun, purpose, safety,
-  health,
+- needs: rest, social, fun, purpose, safety, health, nutrition,
 - personality: curiosity, sociability, stubbornness, temper, greed,
 - genome: focus, resilience, creativity, empathy, discipline, curiosity,
   sociability, risk tolerance, and related traits,
@@ -20,16 +19,26 @@ Each agent has:
 
 ## Work And Life
 
-Work consumes rest, fun, and social energy. It increases purpose and sometimes
-stress. Work, training, research, and construction also consume body health.
+Work consumes rest, fun, social energy, nutrition, and sometimes body health. It
+increases purpose and sometimes stress. Training, research, and construction
+also consume nutrition and body condition.
 This is the core exchange: agents can convert happiness and body condition into
 credits, products, buildings, or knowledge, but they must later recover.
 
 The exchange has a hard stop. If an agent falls below the work redline for
-health, stress, or mood, it cannot keep claiming or continuing paid work. The
-world reopens its task and routes the agent to emergency clinic care or home
-rest first. This keeps greed and labor pressure realistic without letting the
-simulation normalize working a collapsed agent to zero health.
+health, nutrition, stress, or mood, it cannot keep claiming or continuing paid
+work. The world reopens its task and routes the agent to food, emergency clinic
+care, or home rest first. This keeps greed and labor pressure realistic without
+letting the simulation normalize working a collapsed agent to zero health or
+zero food.
+
+Food is a first-class cost of life. Nutrition decays every tick, faster under
+work, stress, training, and homelessness. Hungry agents buy meals before
+entertainment. If they lack meal money but can still move, the civic layer opens
+a small legal survival job assigned to that agent. If they remain broke while
+nutrition and health collapse, the agent becomes `starved`: current work is
+reopened, energy and health drop to zero, and the event is recorded as a death
+in memory and the audit log.
 
 Venues are not decorative. Agents can go to a bar, game space, rest pod, dojo,
 debate club, clinic, or gym depending on their needs. These visits cost
@@ -38,7 +47,7 @@ debate club, clinic, or gym depending on their needs. These visits cost
 - Low happiness/fun pushes agents toward entertainment venues.
 - Low health pushes agents toward the clinic.
 - Medium-low health can push agents toward the gym for fitness recovery.
-- Work and training reduce fun/rest/health while earning credits or skills.
+- Work and training reduce fun/rest/health/nutrition while earning credits or skills.
 
 Homes are different from venues. A venue can entertain, train, heal, or socialize
 an agent, but it cannot replace having a place to sleep. Agents without a
