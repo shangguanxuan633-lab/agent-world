@@ -444,6 +444,10 @@ function renderSummary() {
   const policy = (state.world.monetaryPolicy || [])[0];
   const policyText = policy ? ` - 流通 ${policy.circulating_credits}/${policy.money_supply_cap} - 通胀 ${(Number(policy.inflation_rate) * 100).toFixed(2)}%` : "";
   summary.textContent = `${agents.length} 个智能体 - ${credits} agent-credits - ${active} 个活跃任务 - ${queue} 篇待发布 - 公司 ${companies} 家 - 住房 ${homes} 套 - 市场 ${listings} 个挂牌 - 建筑 ${buildings} 个 - 产品 ${products} 个 - 顶层智能体 ${zhStatus(mode)} - 进化事件 ${evolved}${policyText}${noiseText}`;
+  const workers = currentWorkers();
+  const workerText = workers.length ? workers.map(agentDisplayName).join("、") : "无";
+  const lumen = agents.find((agent) => agent.id === "lumen");
+  summary.textContent += ` - 当前工作者 ${workerText} - Lumen 状态 ${lumen ? zhStatus(lumen.state) : "不在场"}`;
 }
 
 function renderRefreshStatus() {
@@ -682,13 +686,29 @@ function roundedRect(x, y, w, h, r) {
   ctx.closePath();
 }
 
+function agentDisplayName(agent) {
+  if (!agent) return "-";
+  return agent.name || agent.id;
+}
+
+function currentWorkers() {
+  return (state.world.agents || []).filter((agent) => agent.state === "working" || agent.current_task_id);
+}
+
+function taskWorkers(task) {
+  return currentWorkers().filter((agent) => Number(agent.current_task_id) === Number(task.id));
+}
+
 function renderAgents() {
   const el = document.getElementById("agentList");
   el.innerHTML = state.world.agents.map((agent) => {
     const skills = agent.skills.slice(0, 3).map((skill) => skill.name).join(", ");
     const liveClass = isAgentHot(agent.id) ? " live" : "";
-    return `<div class="item agent-card${liveClass}" data-agent="${agent.id}" role="button" tabindex="0">
+    const workClass = agent.state === "working" || agent.current_task_id ? " working" : "";
+    const taskText = agent.current_task_id ? ` - 当前任务 #${agent.current_task_id}` : "";
+    return `<div class="item agent-card${liveClass}${workClass}" data-agent="${agent.id}" role="button" tabindex="0">
       <strong>${escapeHtml(agent.name)} <span class="badge">${escapeHtml(zhRole(agent.role))}</span></strong>
+      ${taskText ? `<span class="worker-line"><span class="worker-badge">正在执行</span>${escapeHtml(taskText.replace(" - ", ""))}</span>` : ""}
       <span>${escapeHtml(zhStatus(agent.state))} - ${agent.credits} agent-credits - 心情 ${agent.mood.toFixed(2)} - 精力 ${agent.energy.toFixed(2)}</span>
       <span>愤怒 ${agent.emotions.anger.toFixed(2)} - 压力 ${agent.emotions.stress.toFixed(2)} - 开心 ${agent.needs.fun.toFixed(2)} - 健康 ${agent.needs.health.toFixed(2)}</span>
       <span>${escapeHtml(skills || "暂无技能")}</span>
@@ -712,8 +732,15 @@ function renderTasks() {
   const el = document.getElementById("taskList");
   el.innerHTML = state.world.tasks.slice(0, 12).map((task) => {
     const cls = task.status === "done" ? "done" : "";
+    const workers = taskWorkers(task);
+    const workerLine = workers.length
+      ? `<span class="worker-line"><span class="worker-badge">实际执行者</span>${escapeHtml(workers.map(agentDisplayName).join("、"))}</span>`
+      : task.status === "in_progress"
+        ? `<span class="worker-line"><span class="worker-badge waiting">等待同步</span>该任务正在推进，但尚未映射到具体 agent。</span>`
+        : "";
     return `<div class="item">
       <strong><span class="badge ${cls}">${escapeHtml(zhStatus(task.status))}</span>#${task.id} ${escapeHtml(task.title)}</strong>
+      ${workerLine}
       <span>${targetLabel(task)} - 报酬 ${task.reward} - 进度 ${Math.round(task.progress)}%</span>
       <div class="bar"><i style="width:${Math.round(task.progress)}%"></i></div>
     </div>`;
